@@ -25,7 +25,7 @@ on:
 
 jobs:
   test:
-    name: Test and Lint
+    name: Test and Lint (Golang)
     runs-on: ubuntu-latest
     permissions:
       contents: write

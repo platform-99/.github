@@ -1,4 +1,4 @@
-name: Helm Chart Verify and Publish (Reusable)
+name: Helm Chart Publish (Reusable)
 
 on:
   workflow_call:
@@ -25,6 +25,16 @@ on:
         required: false
         type: string
         default: '3.12.0'
+      validate_before_publish:
+        description: 'Validate chart before publishing'
+        required: false
+        type: boolean
+        default: true
+      strict_lint:
+        description: 'Run helm lint with --strict flag (only used if validate_before_publish is true)'
+        required: false
+        type: boolean
+        default: false
     secrets:
       REGISTRY_USERNAME:
         description: 'Registry username for publishing'
@@ -34,9 +44,28 @@ on:
         required: false
 
 jobs:
-  helm-verify-publish:
-    name: Helm Chart Verify and Publish
+  # Job 1: Validate chart (optional, but recommended)
+  validate:
+    name: Validate Helm Chart
+    if: inputs.validate_before_publish
+    uses: platform-99/.github/.github/workflows/reusable-helm-validate.yml@main
+    with:
+      chart_path: ${{ inputs.chart_path }}
+      chart_name: ${{ inputs.chart_name }}
+      helm_version: ${{ inputs.helm_version }}
+      strict_lint: ${{ inputs.strict_lint }}
+      validate_dependencies: true
+
+  # Job 2: Package and publish chart
+  publish:
+    name: Package and Publish Helm Chart
     runs-on: ubuntu-latest
+    needs: [validate]
+    if: |
+      always() && (
+        !inputs.validate_before_publish || 
+        (inputs.validate_before_publish && (needs.validate.result == 'success' || needs.validate.result == 'skipped'))
+      )
     permissions:
       contents: read
       packages: write
@@ -58,34 +87,30 @@ jobs:
         id: chart-name
         run: |
           if [ -n "${{ inputs.chart_name }}" ]; then
-            echo "name=${{ inputs.chart_name }}" >> $GITHUB_OUTPUT
+            CHART_NAME="${{ inputs.chart_name }}"
           else
             CHART_NAME=$(basename "${{ inputs.chart_path }}")
-            echo "name=$CHART_NAME" >> $GITHUB_OUTPUT
           fi
+          echo "name=$CHART_NAME" >> $GITHUB_OUTPUT
+          echo "📋 Chart name: $CHART_NAME"
 
       - name: Extract chart version
         id: chart-version
         run: |
           VERSION=$(helm show chart ${{ inputs.chart_path }} | grep '^version:' | awk '{print $2}')
+          if [ -z "$VERSION" ]; then
+            echo "❌ Error: Could not extract version from Chart.yaml"
+            exit 1
+          fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "📋 Chart version from Chart.yaml: $VERSION"
+          echo "📋 Chart version: $VERSION"
 
-      - name: Lint Helm chart
-        run: |
-          helm lint ${{ inputs.chart_path }}
-          echo "✅ Helm chart linting passed"
-
-      - name: Validate Helm chart
-        run: |
-          helm template test-release ${{ inputs.chart_path }} --debug --dry-run
-          echo "✅ Helm chart template validation passed"
-
-      - name: Check chart dependencies
+      - name: Build chart dependencies
         run: |
           if [ -f "${{ inputs.chart_path }}/Chart.yaml" ] && grep -q "dependencies:" "${{ inputs.chart_path }}/Chart.yaml"; then
+            echo "📦 Building chart dependencies..."
             helm dependency build ${{ inputs.chart_path }}
-            echo "✅ Helm chart dependencies built"
+            echo "✅ Chart dependencies built"
           else
             echo "ℹ️  No dependencies found in chart"
           fi
@@ -93,10 +118,15 @@ jobs:
       - name: Package Helm chart
         id: package
         run: |
+          echo "📦 Packaging Helm chart..."
           helm package ${{ inputs.chart_path }}
           CHART_FILE=$(ls -t *.tgz | head -1)
+          if [ -z "$CHART_FILE" ]; then
+            echo "❌ Error: Chart packaging failed"
+            exit 1
+          fi
           echo "file=$CHART_FILE" >> $GITHUB_OUTPUT
-          echo "📦 Chart packaged: $CHART_FILE"
+          echo "✅ Chart packaged: $CHART_FILE"
 
       - name: Upload chart artifact
         uses: actions/upload-artifact@v4
@@ -108,9 +138,11 @@ jobs:
       - name: Log in to OCI registry
         if: inputs.publish_chart && inputs.registry != ''
         run: |
+          echo "🔐 Logging in to OCI registry..."
           echo "${{ secrets.REGISTRY_PASSWORD }}" | helm registry login ${{ inputs.registry }} \
             -u ${{ secrets.REGISTRY_USERNAME }} \
             --password-stdin
+          echo "✅ Logged in to ${{ inputs.registry }}"
 
       - name: Publish Helm chart to OCI registry
         if: inputs.publish_chart && inputs.registry != ''
@@ -119,17 +151,23 @@ jobs:
           CHART_NAME="${{ steps.chart-name.outputs.name }}"
           CHART_VERSION="${{ steps.chart-version.outputs.version }}"
           
-          # Load and push to OCI registry
+          echo "📤 Publishing chart to OCI registry..."
           helm push $CHART_FILE oci://${{ inputs.registry }}/$CHART_NAME
           echo "✅ Chart published to oci://${{ inputs.registry }}/$CHART_NAME:$CHART_VERSION"
 
       - name: Chart publish summary
-        if: inputs.publish_chart && inputs.registry != ''
+        if: always()
         run: |
-          echo "### 📦 Helm Chart Published" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Helm Chart Package and Publish Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Chart**: ${{ steps.chart-name.outputs.name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Version**: ${{ steps.chart-version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Registry**: oci://${{ inputs.registry }}/${{ steps.chart-name.outputs.name }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **File**: ${{ steps.package.outputs.file }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Path**: \`${{ inputs.chart_path }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package File**: ${{ steps.package.outputs.file }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.publish_chart }}" == "true" ] && [ -n "${{ inputs.registry }}" ]; then
+            echo "- **Registry**: oci://${{ inputs.registry }}/${{ steps.chart-name.outputs.name }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Published**: ✅ Yes" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Published**: ⏭️ Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
 
