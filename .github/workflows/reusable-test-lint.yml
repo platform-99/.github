@@ -37,6 +37,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref }}
           fetch-depth: 0
 
       - name: Set up Go
@@ -76,8 +77,12 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add .
-          git diff --staged --quiet || git commit -m "chore: auto-format code with gofmt"
-          git push
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: auto-format code with gofmt"
+            git push
+          else
+            echo "No changes to commit"
+          fi
 
       - name: Fail if formatting needed (non-PR)
         if: steps.fmt-check.outputs.needs_formatting == 'true' && github.event_name != 'pull_request'
