@@ -46,11 +46,25 @@ jobs:
           severity: ${{ inputs.severity }}
           exit-code: '0'  # Don't fail build, just report
 
-      - name: Upload Trivy results to GitHub Security
+      - name: Check SARIF file exists
+        id: check-sarif
         if: inputs.upload_to_github && always()
+        run: |
+          if [ -f "trivy-source-results.sarif" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "SARIF file found"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Warning: SARIF file not found"
+          fi
+
+      - name: Upload Trivy results to GitHub Security
+        if: inputs.upload_to_github && always() && steps.check-sarif.outputs.exists == 'true'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-source-results.sarif'
+          wait-for-processing: false
+        continue-on-error: true
 
 
 

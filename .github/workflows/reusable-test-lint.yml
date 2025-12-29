@@ -46,11 +46,13 @@ jobs:
           go-version: ${{ inputs.go_version }}
           cache-dependency-path: ${{ inputs.working_directory }}/go.sum
 
+      # Verify dependency integrity and download all required modules
       - name: Verify dependencies
         run: |
           go mod verify
           go mod download
 
+      # Run static analysis to catch common errors and suspicious code patterns
       - name: Run go vet
         run: go vet ./...
 
