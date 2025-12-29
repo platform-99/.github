@@ -27,6 +27,8 @@ jobs:
   test:
     name: Test and Lint
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
@@ -34,6 +36,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -49,24 +53,58 @@ jobs:
       - name: Run go vet
         run: go vet ./...
 
-      - name: Run go fmt check
+      - name: Check code formatting
+        id: fmt-check
         run: |
-          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
-            echo "Code is not formatted. Run 'go fmt ./...'"
-            gofmt -s -d .
-            exit 1
+          if [ -n "$(gofmt -s -l .)" ]; then
+            echo "needs_formatting=true" >> $GITHUB_OUTPUT
+            echo "Code is not formatted"
+          else
+            echo "needs_formatting=false" >> $GITHUB_OUTPUT
+            echo "Code is properly formatted"
           fi
 
+      - name: Format code
+        if: steps.fmt-check.outputs.needs_formatting == 'true' && github.event_name == 'pull_request'
+        run: |
+          gofmt -s -w .
+          echo "✅ Code has been automatically formatted"
+
+      - name: Commit formatted code
+        if: steps.fmt-check.outputs.needs_formatting == 'true' && github.event_name == 'pull_request'
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .
+          git diff --staged --quiet || git commit -m "chore: auto-format code with gofmt"
+          git push
+
+      - name: Fail if formatting needed (non-PR)
+        if: steps.fmt-check.outputs.needs_formatting == 'true' && github.event_name != 'pull_request'
+        run: |
+          echo "Code is not formatted. Run 'go fmt ./...'"
+          gofmt -s -d .
+          exit 1
+
       - name: Run tests
-        run: go test -v -race -coverprofile=coverage.out ./... || true
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Extract project name
+        id: project-name
+        if: inputs.upload_coverage && always()
+        run: |
+          PROJECT_NAME=$(basename "${{ inputs.working_directory }}")
+          # Remove leading dot and slash if present
+          PROJECT_NAME=${PROJECT_NAME#./}
+          echo "name=$PROJECT_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload coverage
         if: inputs.upload_coverage && always()
         uses: codecov/codecov-action@v4
         with:
           file: ${{ inputs.working_directory }}/coverage.out
-          flags: workload-a
-          name: workload-a-coverage
+          flags: ${{ steps.project-name.outputs.name }}
+          name: ${{ steps.project-name.outputs.name }}-coverage
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
