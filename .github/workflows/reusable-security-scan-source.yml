@@ -23,10 +23,6 @@ on:
         required: false
         type: boolean
         default: true
-    secrets:
-      GITHUB_TOKEN:
-        description: 'GitHub token for uploading security results'
-        required: false
 
 jobs:
   security-scan-source:
