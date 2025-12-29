@@ -25,16 +25,6 @@ on:
         required: false
         type: string
         default: '3.12.0'
-      validate_before_publish:
-        description: 'Validate chart before publishing'
-        required: false
-        type: boolean
-        default: true
-      strict_lint:
-        description: 'Run helm lint with --strict flag (only used if validate_before_publish is true)'
-        required: false
-        type: boolean
-        default: false
     secrets:
       REGISTRY_USERNAME:
         description: 'Registry username for publishing'
@@ -44,28 +34,10 @@ on:
         required: false
 
 jobs:
-  # Job 1: Validate chart (optional, but recommended)
-  validate:
-    name: Validate Helm Chart
-    if: inputs.validate_before_publish
-    uses: platform-99/.github/.github/workflows/reusable-helm-validate.yml@main
-    with:
-      chart_path: ${{ inputs.chart_path }}
-      chart_name: ${{ inputs.chart_name }}
-      helm_version: ${{ inputs.helm_version }}
-      strict_lint: ${{ inputs.strict_lint }}
-      validate_dependencies: true
-
-  # Job 2: Package and publish chart
+  # Package and publish chart
   publish:
     name: Package and Publish Helm Chart
     runs-on: ubuntu-latest
-    needs: [validate]
-    if: |
-      always() && (
-        !inputs.validate_before_publish || 
-        (inputs.validate_before_publish && (needs.validate.result == 'success' || needs.validate.result == 'skipped'))
-      )
     permissions:
       contents: read
       packages: write
