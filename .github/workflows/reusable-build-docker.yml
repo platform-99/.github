@@ -30,6 +30,11 @@ on:
         required: false
         type: boolean
         default: true
+      scan_before_push:
+        description: 'Scan image before pushing (builds single platform, scans, then pushes all platforms)'
+        required: false
+        type: boolean
+        default: false
     secrets:
       REGISTRY_USERNAME:
         description: 'Registry username'
@@ -45,6 +50,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
+      actions: read
     
     outputs:
       image_digest: ${{ steps.meta.outputs.digest }}
@@ -86,8 +93,71 @@ jobs:
             org.opencontainers.image.vendor="Platform 99"
             org.opencontainers.image.licenses="https://github.com/${{ github.repository }}/blob/main/LICENSE.md"
 
+      # Build image for scanning (single platform, loaded locally)
+      - name: Build image for scanning
+        if: inputs.scan_before_push && inputs.push_image
+        id: docker_build_scan
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ inputs.context_path }}
+          push: false
+          load: true  # Load image locally for scanning (requires single platform)
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64  # Build single platform for scanning
+
+      # Extract first tag for scanning
+      - name: Get first image tag
+        if: inputs.scan_before_push && inputs.push_image
+        id: get_tag
+        run: |
+          FIRST_TAG=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
+          echo "tag=$FIRST_TAG" >> $GITHUB_OUTPUT
+          echo "Scanning image: $FIRST_TAG"
+
+      # Security scan before pushing (if enabled)
+      - name: Scan image with Trivy
+        if: inputs.scan_before_push && inputs.push_image
+        id: trivy_scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.get_tag.outputs.tag }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'  # Fail if critical/high vulnerabilities found
+
+      - name: Check SARIF file exists
+        id: check-sarif
+        if: inputs.scan_before_push && inputs.push_image && always()
+        run: |
+          if [ -f "trivy-results.sarif" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "SARIF file found"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Warning: SARIF file not found"
+          fi
+
+      - name: Upload Trivy results to GitHub Security
+        if: inputs.scan_before_push && inputs.push_image && always() && steps.check-sarif.outputs.exists == 'true'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'trivy-results.sarif'
+          wait-for-processing: false
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build and push image (all platforms, only if scan passed or scan disabled)
       - name: Build and push Docker image
-        id: docker_build
+        id: docker_push
+        if: |
+          !inputs.scan_before_push || 
+          !inputs.push_image ||
+          (inputs.scan_before_push && inputs.push_image && steps.trivy_scan.outcome == 'success')
         uses: docker/build-push-action@v5
         with:
           context: ${{ inputs.context_path }}          # Path to the Dockerfile
@@ -99,5 +169,6 @@ jobs:
           platforms: ${{ inputs.platforms }}           # Allows for "Multi-platform" builds (comma-separated list of architectures)
 
       - name: Image digest
-        run: echo "Image pushed with digest ${{ steps.docker_build.outputs.digest }}"
+        if: inputs.push_image && steps.docker_push.outcome == 'success'
+        run: echo "Image pushed with digest ${{ steps.docker_push.outputs.digest }}"
 
