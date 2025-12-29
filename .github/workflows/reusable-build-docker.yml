@@ -35,6 +35,11 @@ on:
         required: false
         type: boolean
         default: true
+      trivy_exit_code:
+        description: 'Exit code for Trivy scan (0 = do not fail on vulnerabilities, 1 = fail on vulnerabilities)'
+        required: false
+        type: string
+        default: '1'
     secrets:
       REGISTRY_USERNAME:
         description: 'Registry username'
@@ -157,8 +162,7 @@ jobs:
           image-ref: ${{ steps.get_tag.outputs.tag }}
           format: 'table'
           severity: 'CRITICAL,HIGH'
-          exit-code: '1'
-
+          exit-code: ${{ inputs.trivy_exit_code }}
 
       # Build and push image (all platforms, only if scan passed or scan disabled)
       - name: Build and push Docker image
