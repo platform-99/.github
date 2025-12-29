@@ -78,7 +78,7 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=raw,format=short
+            type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}},enable=${{ inputs.include_semver_tags }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ inputs.include_semver_tags }}
