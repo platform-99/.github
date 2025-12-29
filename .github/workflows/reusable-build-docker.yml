@@ -54,6 +54,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Used for multi-platform builds
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      # Unlocks Multi-Platform build, enables the GitHub Actions Cache, and Parallel Stage Execution
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -73,22 +78,26 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=sha,prefix={{branch}}-
+            type=raw,format=short
             type=raw,value=latest,enable={{is_default_branch}}
-            ${{ inputs.include_semver_tags && 'type=semver,pattern={{version}}' || '' }}
-            ${{ inputs.include_semver_tags && 'type=semver,pattern={{major}}.{{minor}}' || '' }}
+            type=semver,pattern={{version}},enable=${{ inputs.include_semver_tags }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ inputs.include_semver_tags }}
+          labels: |
+            org.opencontainers.image.vendor="Platform 99"
+            org.opencontainers.image.licenses="https://github.com/${{ github.repository }}/blob/main/LICENSE.md"
 
       - name: Build and push Docker image
+        id: docker_build
         uses: docker/build-push-action@v5
         with:
-          context: ${{ inputs.context_path }}
-          push: ${{ inputs.push_image }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: ${{ inputs.platforms }}
+          context: ${{ inputs.context_path }}          # Path to the Dockerfile
+          push: ${{ inputs.push_image }}               # Whether to push the image
+          tags: ${{ steps.meta.outputs.tags }}         # Generated tags
+          labels: ${{ steps.meta.outputs.labels }} 
+          cache-from: type=gha                         # Use GitHub Actions cache
+          cache-to: type=gha,mode=max                  # Use GitHub Actions cache - This tells Docker where to save the layers it just created. Caches every single layer from every stage
+          platforms: ${{ inputs.platforms }}           # Allows for "Multi-platform" builds (comma-separated list of architectures)
 
       - name: Image digest
-        run: echo "Image pushed with digest ${{ steps.meta.outputs.digest }}"
+        run: echo "Image pushed with digest ${{ steps.docker_build.outputs.digest }}"
 
