@@ -1,0 +1,72 @@
+name: Test and Lint (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: 'Working directory for the Go application'
+        required: false
+        type: string
+        default: './workload-a'
+      go_version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: '1.21'
+      upload_coverage:
+        description: 'Whether to upload coverage to Codecov'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      CODECOV_TOKEN:
+        description: 'Codecov token (optional)'
+        required: false
+
+jobs:
+  test:
+    name: Test and Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working_directory }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go_version }}
+          cache-dependency-path: ${{ inputs.working_directory }}/go.sum
+
+      - name: Verify dependencies
+        run: |
+          go mod verify
+          go mod download
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run go fmt check
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Code is not formatted. Run 'go fmt ./...'"
+            gofmt -s -d .
+            exit 1
+          fi
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./... || true
+
+      - name: Upload coverage
+        if: inputs.upload_coverage && always()
+        uses: codecov/codecov-action@v4
+        with:
+          file: ${{ inputs.working_directory }}/coverage.out
+          flags: workload-a
+          name: workload-a-coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+

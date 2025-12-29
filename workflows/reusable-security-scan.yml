@@ -1,0 +1,50 @@
+name: Security Scan (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      image_ref:
+        description: 'Container image reference to scan'
+        required: true
+        type: string
+      scan_format:
+        description: 'Output format for scan results'
+        required: false
+        type: string
+        default: 'sarif'
+      upload_to_github:
+        description: 'Upload results to GitHub Security'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      GITHUB_TOKEN:
+        description: 'GitHub token for uploading security results'
+        required: false
+
+jobs:
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ inputs.image_ref }}
+          format: ${{ inputs.scan_format }}
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        if: inputs.upload_to_github && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+

@@ -1,0 +1,60 @@
+name: Security Scan Source Code (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      scan_path:
+        description: 'Path to scan (directory or file)'
+        required: false
+        type: string
+        default: '.'
+      scan_type:
+        description: 'Type of scan: fs (filesystem), repo (repository)'
+        required: false
+        type: string
+        default: 'fs'
+      severity:
+        description: 'Minimum severity level'
+        required: false
+        type: string
+        default: 'CRITICAL,HIGH'
+      upload_to_github:
+        description: 'Upload results to GitHub Security'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      GITHUB_TOKEN:
+        description: 'GitHub token for uploading security results'
+        required: false
+
+jobs:
+  security-scan-source:
+    name: Security Scan Source Code
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: ${{ inputs.scan_type }}
+          scan-ref: ${{ inputs.scan_path }}
+          format: 'sarif'
+          output: 'trivy-source-results.sarif'
+          severity: ${{ inputs.severity }}
+          exit-code: '0'  # Don't fail build, just report
+
+      - name: Upload Trivy results to GitHub Security
+        if: inputs.upload_to_github && always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-source-results.sarif'
+
+
+

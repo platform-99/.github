@@ -1,0 +1,113 @@
+name: Workload-A CI/CD Pipeline
+
+# This is the main orchestrator workflow that calls reusable workflows
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'workload-a/**'
+      - '.github/workflows/workload-a-ci.yml'
+      - '.github/workflows/reusable-*.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'workload-a/**'
+      - '.github/workflows/workload-a-ci.yml'
+      - '.github/workflows/reusable-*.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/workload-a
+  CHART_PATH: ./workload-a/deploy/workload-a
+
+jobs:
+  # Step 1: Test and Lint
+  test:
+    name: Test and Lint
+    uses: ./.github/workflows/reusable-test-lint.yml
+    with:
+      working_directory: './workload-a'
+      go_version: '1.21'
+      upload_coverage: true
+
+  # Step 2: Security Scan Source Code (shift-left security)
+  security-scan-source:
+    name: Security Scan Source Code
+    needs: test
+    uses: ./.github/workflows/reusable-security-scan-source.yml
+    with:
+      scan_path: './workload-a'
+      scan_type: 'fs'
+      severity: 'CRITICAL,HIGH'
+      upload_to_github: true
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 3: Build Docker Image
+  build:
+    name: Build Docker Image
+    needs: security-scan-source
+    uses: ./.github/workflows/reusable-build-docker.yml
+    with:
+      context_path: './workload-a'
+      registry: ghcr.io
+      image_name: ${{ github.repository }}/workload-a
+      push_image: ${{ github.event_name != 'pull_request' }}
+      platforms: 'linux/amd64,linux/arm64'
+      include_semver_tags: true
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 4: Security Scan Container Image
+  security-scan-image:
+    name: Security Scan Container Image
+    needs: build
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/reusable-security-scan.yml
+    with:
+      image_ref: ghcr.io/${{ github.repository }}/workload-a:${{ github.ref_name }}
+      scan_format: 'sarif'
+      upload_to_github: true
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 5: Verify and Publish Helm Chart
+  helm-chart:
+    name: Helm Chart Verify and Publish
+    needs: build
+    uses: ./.github/workflows/reusable-helm-verify-publish.yml
+    with:
+      chart_path: ./workload-a/deploy/workload-a
+      chart_name: 'workload-a'
+      registry: ghcr.io
+      publish_chart: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      helm_version: '3.12.0'
+    secrets:
+      REGISTRY_USERNAME: ${{ github.actor }}
+      REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+
+  # Summary job (runs after all jobs complete)
+  pipeline-summary:
+    name: Pipeline Summary
+    needs: [test, security-scan-source, build, security-scan-image, helm-chart]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        run: |
+          echo "### 🚀 Workload-A Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Test & Lint | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan (Source) | ${{ needs.security-scan-source.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Docker | ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan (Image) | ${{ needs.security-scan-image.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Helm Chart | ${{ needs.helm-chart.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Image**: \`ghcr.io/${{ github.repository }}/workload-a\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Chart Path**: \`./workload-a/deploy/workload-a\`" >> $GITHUB_STEP_SUMMARY
