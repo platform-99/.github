@@ -66,6 +66,8 @@ jobs:
           sarif_file: 'trivy-source-results.sarif'
           wait-for-processing: false
         continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 
 
