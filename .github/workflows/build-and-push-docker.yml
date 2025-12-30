@@ -184,3 +184,43 @@ jobs:
         if: inputs.push_image && steps.docker_push.outcome == 'success'
         run: echo "Image pushed with digest ${{ steps.docker_push.outputs.digest }}"
 
+      - name: Build Summary
+        if: always()
+        run: |
+          echo "### 🐳 Docker Image Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.scan_image }}" == "true" ]; then
+            echo "| Image Scan | ✅ Enabled |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Image Scan | ⏭️ Disabled |" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.push_image }}" == "true" ] && [ "${{ steps.docker_push.outcome }}" == "success" ]; then
+            echo "| Image Pushed | ✅ Yes |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Image Pushed | ❌ No |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Registry**: \`${{ inputs.registry }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image**: \`${{ inputs.registry }}/${{ inputs.image_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Build Context**: \`${{ inputs.context_path }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Platforms**: \`${{ inputs.platforms }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.docker_push.outcome }}" == "success" ] && [ -n "${{ steps.meta.outputs.tags }}" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Generated Tags**:\`\`\`" >> $GITHUB_STEP_SUMMARY
+            echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+            if [ -n "${{ steps.docker_push.outputs.digest }}" ]; then
+              echo "**Image Digest**: \`${{ steps.docker_push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.scan_image }}" == "true" ]; then
+            echo "> 🔒 Image security scan runs **before** pushing to prevent vulnerable images from being published." >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.include_semver_tags }}" == "true" ]; then
+            echo "> 🏷️ Semantic version tags are automatically generated from Git tags (e.g., v1.0.0 → 1.0.0, 1.0)." >> $GITHUB_STEP_SUMMARY
+          fi
+
