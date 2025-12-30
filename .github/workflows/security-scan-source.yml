@@ -70,6 +70,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Run Trivy filesystem scan (table format)
+        id: trivy-table-scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: ${{ inputs.scan_type }}
+          scan-ref: ${{ inputs.scan_path }}
+          format: 'table'
+          severity: ${{ inputs.severity }}
+          exit-code: '0'  # Don't fail build, just report
+
       - name: Security Scan Summary
         if: always()
         run: |
@@ -96,6 +106,7 @@ jobs:
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> 🔍 Trivy scans for vulnerabilities in source code. Results are filtered to show only \`${{ inputs.severity }}\` severity issues." >> $GITHUB_STEP_SUMMARY
+          echo "> 📋 Scan results are displayed in table format in the workflow logs and uploaded as SARIF to GitHub Security (if enabled)." >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.upload_to_github }}" == "true" ]; then
-            echo "> 📊 Results are uploaded to GitHub Security tab for review." >> $GITHUB_STEP_SUMMARY
+            echo "> 📊 SARIF results are available in the GitHub Security tab for detailed review." >> $GITHUB_STEP_SUMMARY
           fi
