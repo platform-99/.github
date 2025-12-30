@@ -102,51 +102,6 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      - name: Check if semantic version tags exist
-        id: check-semver-tags
-        if: inputs.push_image && inputs.skip_if_semver_exists && inputs.include_semver_tags && github.ref_type == 'tag'
-        run: |
-          # Extract version from tag (e.g., v1.0.0 -> 1.0.0)
-          VERSION_TAG="${GITHUB_REF#refs/tags/}"
-          VERSION="${VERSION_TAG#v}"  # Remove 'v' prefix if present
-          
-          IMAGE_NAME="${{ inputs.registry }}/${{ inputs.image_name }}"
-          
-          echo "🔍 Checking if semantic version tags exist for version: $VERSION"
-          echo "Image: $IMAGE_NAME"
-          
-          # Check if the full version tag exists (e.g., 1.0.0)
-          FULL_VERSION_TAG="${IMAGE_NAME}:${VERSION}"
-          FULL_EXISTS="false"
-          if docker manifest inspect "$FULL_VERSION_TAG" &>/dev/null; then
-            FULL_EXISTS="true"
-            echo "⚠️ Tag $VERSION already exists in registry"
-          else
-            echo "✅ Tag $VERSION does not exist, will push"
-          fi
-          
-          # Check if major.minor tag exists (e.g., 1.0)
-          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
-          MAJOR_MINOR_TAG="${IMAGE_NAME}:${MAJOR_MINOR}"
-          MAJOR_MINOR_EXISTS="false"
-          if docker manifest inspect "$MAJOR_MINOR_TAG" &>/dev/null; then
-            MAJOR_MINOR_EXISTS="true"
-            echo "⚠️ Tag $MAJOR_MINOR already exists in registry"
-          else
-            echo "✅ Tag $MAJOR_MINOR does not exist, will push"
-          fi
-          
-          echo "full_version_exists=$FULL_EXISTS" >> $GITHUB_OUTPUT
-          echo "major_minor_exists=$MAJOR_MINOR_EXISTS" >> $GITHUB_OUTPUT
-          
-          # If both exist, skip pushing
-          if [ "$FULL_EXISTS" == "true" ] && [ "$MAJOR_MINOR_EXISTS" == "true" ]; then
-            echo "skip_push=true" >> $GITHUB_OUTPUT
-            echo "⏭️ Both semantic version tags exist, skipping push"
-          else
-            echo "skip_push=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -228,6 +183,51 @@ jobs:
           format: 'table'
           severity: 'CRITICAL,HIGH'
           exit-code: ${{ inputs.trivy_exit_code }}
+
+      - name: Check if semantic version tags exist
+        id: check-semver-tags
+        if: inputs.push_image && inputs.skip_if_semver_exists && inputs.include_semver_tags && github.ref_type == 'tag'
+        run: |
+          # Extract version from tag (e.g., v1.0.0 -> 1.0.0)
+          VERSION_TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION_TAG#v}"  # Remove 'v' prefix if present
+          
+          IMAGE_NAME="${{ inputs.registry }}/${{ inputs.image_name }}"
+          
+          echo "🔍 Checking if semantic version tags exist for version: $VERSION"
+          echo "Image: $IMAGE_NAME"
+          
+          # Check if the full version tag exists (e.g., 1.0.0)
+          FULL_VERSION_TAG="${IMAGE_NAME}:${VERSION}"
+          FULL_EXISTS="false"
+          if docker manifest inspect "$FULL_VERSION_TAG" &>/dev/null; then
+            FULL_EXISTS="true"
+            echo "⚠️ Tag $VERSION already exists in registry"
+          else
+            echo "✅ Tag $VERSION does not exist, will push"
+          fi
+          
+          # Check if major.minor tag exists (e.g., 1.0)
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          MAJOR_MINOR_TAG="${IMAGE_NAME}:${MAJOR_MINOR}"
+          MAJOR_MINOR_EXISTS="false"
+          if docker manifest inspect "$MAJOR_MINOR_TAG" &>/dev/null; then
+            MAJOR_MINOR_EXISTS="true"
+            echo "⚠️ Tag $MAJOR_MINOR already exists in registry"
+          else
+            echo "✅ Tag $MAJOR_MINOR does not exist, will push"
+          fi
+          
+          echo "full_version_exists=$FULL_EXISTS" >> $GITHUB_OUTPUT
+          echo "major_minor_exists=$MAJOR_MINOR_EXISTS" >> $GITHUB_OUTPUT
+          
+          # If both exist, skip pushing
+          if [ "$FULL_EXISTS" == "true" ] && [ "$MAJOR_MINOR_EXISTS" == "true" ]; then
+            echo "skip_push=true" >> $GITHUB_OUTPUT
+            echo "⏭️ Both semantic version tags exist, skipping push"
+          else
+            echo "skip_push=false" >> $GITHUB_OUTPUT
+          fi
 
       # Build and push image (all platforms, only if scan passed or scan disabled)
       - name: Build and push Docker image
