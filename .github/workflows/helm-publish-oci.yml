@@ -29,6 +29,11 @@ on:
         required: false
         type: boolean
         default: false
+      skip_if_exists:
+        description: 'Skip publishing if the chart version already exists in the registry'
+        required: false
+        type: boolean
+        default: true
       helm_version:
         description: 'Helm version to use'
         required: false
@@ -125,8 +130,55 @@ jobs:
             --password-stdin
           echo "✅ Logged in to ${{ inputs.registry }}"
 
+      - name: Check if chart version exists
+        id: check-version
+        if: inputs.publish_chart && inputs.registry != '' && inputs.skip_if_exists
+        run: |
+          CHART_NAME="${{ steps.chart-name.outputs.name }}"
+          CHART_VERSION="${{ steps.chart-version.outputs.version }}"
+          
+          # Build registry path
+          if [[ "${{ inputs.registry }}" == *"ghcr.io"* ]] && [ -n "${{ inputs.registry_owner }}" ]; then
+            if [ -n "${{ inputs.registry_namespace }}" ]; then
+              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/${{ inputs.registry_namespace }}/$CHART_NAME"
+            else
+              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/$CHART_NAME"
+            fi
+          else
+            if [ -n "${{ inputs.registry_namespace }}" ]; then
+              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_namespace }}/$CHART_NAME"
+            else
+              REGISTRY_PATH="${{ inputs.registry }}/$CHART_NAME"
+            fi
+          fi
+          
+          echo "🔍 Checking if chart version $CHART_VERSION already exists in registry..."
+          echo "Registry path: oci://$REGISTRY_PATH"
+          
+          # Try to show the chart - if it succeeds, the version exists
+          if helm show chart "oci://$REGISTRY_PATH" --version "$CHART_VERSION" &>/dev/null; then
+            EXISTING_VERSION=$(helm show chart "oci://$REGISTRY_PATH" --version "$CHART_VERSION" 2>/dev/null | grep '^version:' | awk '{print $2}' || echo "")
+            if [ "$EXISTING_VERSION" == "$CHART_VERSION" ]; then
+              echo "exists=true" >> $GITHUB_OUTPUT
+              echo "⚠️ Chart version $CHART_VERSION already exists in registry"
+              echo "Skipping publish (skip_if_exists is enabled)"
+            else
+              echo "exists=false" >> $GITHUB_OUTPUT
+              echo "✅ Chart version $CHART_VERSION does not exist, will publish"
+            fi
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "✅ Chart version $CHART_VERSION does not exist, will publish"
+          fi
+
       - name: Publish Helm chart to OCI registry
-        if: inputs.publish_chart && inputs.registry != ''
+        if: |
+          inputs.publish_chart &&
+          inputs.registry != '' &&
+          (
+            !inputs.skip_if_exists ||
+            steps.check-version.outputs.exists != 'true'
+          )
         run: |
           CHART_FILE="${{ steps.package.outputs.file }}"
           CHART_NAME="${{ steps.chart-name.outputs.name }}"
@@ -167,8 +219,18 @@ jobs:
           echo "- **Package File**: ${{ steps.package.outputs.file }}" >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.publish_chart }}" == "true" ] && [ -n "${{ inputs.registry }}" ]; then
             echo "- **Registry**: oci://${{ inputs.registry }}/${{ steps.chart-name.outputs.name }}" >> $GITHUB_STEP_SUMMARY
-            echo "- **Published**: ✅ Yes" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ inputs.skip_if_exists }}" == "true" ] && [ "${{ steps.check-version.outputs.exists }}" == "true" ]; then
+              echo "- **Published**: ⏭️ Skipped (version already exists)" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ steps.package.outcome }}" == "success" ]; then
+              echo "- **Published**: ✅ Yes" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "- **Published**: ❌ Failed" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "- **Published**: ⏭️ Skipped" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.skip_if_exists }}" == "true" ] && [ "${{ inputs.publish_chart }}" == "true" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> 💡 **Skip if exists** is enabled. Chart will only be published if the version doesn't already exist in the registry." >> $GITHUB_STEP_SUMMARY
           fi
 
