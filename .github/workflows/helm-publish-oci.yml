@@ -130,14 +130,20 @@ jobs:
             --password-stdin
           echo "✅ Logged in to ${{ inputs.registry }}"
 
-      - name: Check if chart version exists
-        id: check-version
-        if: inputs.publish_chart && inputs.registry != '' && inputs.skip_if_exists
+      - name: Build registry path
+        id: registry-path
+        if: inputs.publish_chart && inputs.registry != ''
         run: |
           CHART_NAME="${{ steps.chart-name.outputs.name }}"
-          CHART_VERSION="${{ steps.chart-version.outputs.version }}"
           
-          # Build registry path (same logic as publish step)
+          # Debug: Show all inputs
+          echo "🔍 Debug - Path construction inputs:"
+          echo "  Registry: ${{ inputs.registry }}"
+          echo "  Registry Owner: ${{ inputs.registry_owner }}"
+          echo "  Registry Namespace: ${{ inputs.registry_namespace }}"
+          echo "  Chart Name: $CHART_NAME"
+          
+          # Build registry path - this will be used by both check and publish steps
           if [[ "${{ inputs.registry }}" == *"ghcr.io"* ]] && [ -n "${{ inputs.registry_owner }}" ]; then
             if [ -n "${{ inputs.registry_namespace }}" ]; then
               REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/${{ inputs.registry_namespace }}/$CHART_NAME"
@@ -151,6 +157,16 @@ jobs:
               REGISTRY_PATH="${{ inputs.registry }}/$CHART_NAME"
             fi
           fi
+          
+          echo "path=$REGISTRY_PATH" >> $GITHUB_OUTPUT
+          echo "📋 Registry path: oci://$REGISTRY_PATH"
+
+      - name: Check if chart version exists
+        id: check-version
+        if: inputs.publish_chart && inputs.registry != '' && inputs.skip_if_exists
+        run: |
+          CHART_VERSION="${{ steps.chart-version.outputs.version }}"
+          REGISTRY_PATH="${{ steps.registry-path.outputs.path }}"
           
           echo "🔍 Checking if chart version $CHART_VERSION already exists in registry..."
           echo "Registry path: oci://$REGISTRY_PATH"
@@ -176,27 +192,8 @@ jobs:
           )
         run: |
           CHART_FILE="${{ steps.package.outputs.file }}"
-          CHART_NAME="${{ steps.chart-name.outputs.name }}"
           CHART_VERSION="${{ steps.chart-version.outputs.version }}"
-          
-          # For GHCR, we need to include the registry owner in the path
-          # Format: ghcr.io/OWNER/NAMESPACE/CHART_NAME or ghcr.io/OWNER/CHART_NAME
-          # Use namespace to distinguish charts from Docker images (e.g., charts/workload-a)
-          CHART_NAME="${{ steps.chart-name.outputs.name }}"
-          if [[ "${{ inputs.registry }}" == *"ghcr.io"* ]] && [ -n "${{ inputs.registry_owner }}" ]; then
-            if [ -n "${{ inputs.registry_namespace }}" ]; then
-              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/${{ inputs.registry_namespace }}/$CHART_NAME"
-            else
-              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/$CHART_NAME"
-            fi
-          else
-            # For other registries
-            if [ -n "${{ inputs.registry_namespace }}" ]; then
-              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_namespace }}/$CHART_NAME"
-            else
-              REGISTRY_PATH="${{ inputs.registry }}/$CHART_NAME"
-            fi
-          fi
+          REGISTRY_PATH="${{ steps.registry-path.outputs.path }}"
           
           echo "📤 Publishing chart to OCI registry..."
           echo "Registry path: oci://$REGISTRY_PATH"
