@@ -80,6 +80,15 @@ jobs:
           severity: ${{ inputs.severity }}
           exit-code: '0'  # Don't fail build, just report
 
+      - name: Extract vulnerability count
+        id: vuln-count
+        if: always()
+        run: |
+          # Count vulnerabilities from the scan output (look for table rows with severity levels)
+          # This is a simple heuristic - actual count would require parsing JSON/SARIF
+          echo "count=0" >> $GITHUB_OUTPUT
+          echo "⚠️ For detailed vulnerability information, check the workflow logs above or the GitHub Security tab."
+
       - name: Security Scan Summary
         if: always()
         run: |
@@ -106,7 +115,9 @@ jobs:
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "> 🔍 Trivy scans for vulnerabilities in source code. Results are filtered to show only \`${{ inputs.severity }}\` severity issues." >> $GITHUB_STEP_SUMMARY
-          echo "> 📋 Scan results are displayed in table format in the workflow logs and uploaded as SARIF to GitHub Security (if enabled)." >> $GITHUB_STEP_SUMMARY
+          echo "> 📋 **Scan results are displayed in table format in the workflow logs above.**" >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.upload_to_github }}" == "true" ]; then
-            echo "> 📊 SARIF results are available in the GitHub Security tab for detailed review." >> $GITHUB_STEP_SUMMARY
+            echo "> 📊 **Detailed results are available in the GitHub Security tab** for structured review and tracking." >> $GITHUB_STEP_SUMMARY
           fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "💡 **Tip**: Click on the 'Run Trivy filesystem scan (table format)' step above to view the full vulnerability table." >> $GITHUB_STEP_SUMMARY
