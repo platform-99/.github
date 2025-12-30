@@ -284,19 +284,6 @@ jobs:
           echo "📦 Image pushed with digest: ${{ steps.docker_push.outputs.digest }}"
           echo "📍 Full image reference: ${{ inputs.registry }}/${{ inputs.image_name }}@${{ steps.docker_push.outputs.digest }}"
 
-      # - name: Clean up untagged images
-      #   if: always()
-      #   run: |
-      #     echo "🧹 Cleaning up local untagged Docker images..."
-      #     # Remove untagged/dangling images locally (these are intermediate build artifacts)
-      #     UNTAGGED_COUNT=$(docker images -f "dangling=true" -q 2>/dev/null | wc -l || echo "0")
-      #     if [ "$UNTAGGED_COUNT" -gt 0 ]; then
-      #       docker image prune -f
-      #       echo "✅ Removed $UNTAGGED_COUNT untagged local image(s)"
-      #     else
-      #       echo "ℹ️  No untagged local images to clean up"
-      #     fi
-
       - name: Build Summary
         if: always()
         run: |
