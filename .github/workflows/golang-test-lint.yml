@@ -146,7 +146,7 @@ jobs:
           PROJECT_NAME=${PROJECT_NAME#./}
           echo "name=$PROJECT_NAME" >> $GITHUB_OUTPUT
 
-      - name: Upload coverage
+      - name: Upload coverage to codecov
         if: inputs.upload_coverage_to_codecov && steps.run-tests.outcome == 'success'
         id: upload-coverage
         uses: codecov/codecov-action@v4
