@@ -168,8 +168,8 @@ jobs:
       - name: Build and push Docker image
         id: docker_push
         if: |
-          inputs.push_image ||
-          (inputs.scan_image && steps.trivy_scan_table.outcome == 'success')
+          inputs.push_image &&
+          ((inputs.scan_image && steps.trivy_scan_table.outcome == 'success') || !inputs.scan_image)
         uses: docker/build-push-action@v5
         with:
           context: ${{ inputs.context_path }}          # Path to the Dockerfile
