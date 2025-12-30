@@ -11,6 +11,11 @@ on:
         description: 'Chart name (defaults to directory name)'
         required: false
         type: string
+      registry_namespace:
+        description: 'Registry namespace for charts (e.g., "charts" to publish as charts/workload-a instead of workload-a)'
+        required: false
+        type: string
+        default: ''
       registry:
         description: 'OCI registry URL for publishing chart'
         required: false
@@ -128,12 +133,22 @@ jobs:
           CHART_VERSION="${{ steps.chart-version.outputs.version }}"
           
           # For GHCR, we need to include the registry owner in the path
-          # Format: ghcr.io/OWNER/CHART_NAME
+          # Format: ghcr.io/OWNER/NAMESPACE/CHART_NAME or ghcr.io/OWNER/CHART_NAME
+          # Use namespace to distinguish charts from Docker images (e.g., charts/workload-a)
+          CHART_NAME="${{ steps.chart-name.outputs.name }}"
           if [[ "${{ inputs.registry }}" == *"ghcr.io"* ]] && [ -n "${{ inputs.registry_owner }}" ]; then
-            REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/$CHART_NAME"
+            if [ -n "${{ inputs.registry_namespace }}" ]; then
+              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/${{ inputs.registry_namespace }}/$CHART_NAME"
+            else
+              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/$CHART_NAME"
+            fi
           else
-            # For other registries or if owner not specified, use the chart name directly
-            REGISTRY_PATH="${{ inputs.registry }}/$CHART_NAME"
+            # For other registries
+            if [ -n "${{ inputs.registry_namespace }}" ]; then
+              REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_namespace }}/$CHART_NAME"
+            else
+              REGISTRY_PATH="${{ inputs.registry }}/$CHART_NAME"
+            fi
           fi
           
           echo "📤 Publishing chart to OCI registry..."
