@@ -18,6 +18,11 @@ on:
         required: false
         type: boolean
         default: true
+      generate_coverage_report:
+        description: 'Whether to generate a coverage report (text and HTML)'
+        required: false
+        type: boolean
+        default: false
     secrets:
       CODECOV_TOKEN:
         description: 'Codecov token (optional)'
@@ -94,7 +99,43 @@ jobs:
           exit 1
 
       - name: Run tests
+        id: run-tests
         run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Generate coverage report
+        id: generate-coverage-report
+        if: inputs.generate_coverage_report && always() && steps.run-tests.outcome == 'success'
+        run: |
+          if [ -f "coverage.out" ]; then
+            echo "📊 Generating coverage report..."
+            
+            # Generate text summary
+            go tool cover -func=coverage.out > coverage.txt
+            echo "✅ Text coverage report generated: coverage.txt"
+            
+            # Extract total coverage percentage
+            COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+            echo "coverage=$COVERAGE" >> $GITHUB_OUTPUT
+            echo "📈 Total coverage: $COVERAGE"
+            
+            # Generate HTML report
+            go tool cover -html=coverage.out -o coverage.html
+            echo "✅ HTML coverage report generated: coverage.html"
+          else
+            echo "⚠️ Coverage file not found, skipping report generation"
+            echo "coverage=N/A" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload coverage report artifact
+        if: inputs.generate_coverage_report && always() && steps.run-tests.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.txt
+            coverage.html
+          retention-days: 30
+          if-no-files-found: ignore
 
       - name: Extract project name
         id: project-name
@@ -146,6 +187,13 @@ jobs:
           else
             echo "| Coverage Upload | ⏭️ Disabled |" >> $GITHUB_STEP_SUMMARY
           fi
+          if [ "${{ inputs.generate_coverage_report }}" == "true" ] && [ -n "${{ steps.generate-coverage-report.outputs.coverage }}" ]; then
+            echo "| Coverage Report | 📊 ${{ steps.generate-coverage-report.outputs.coverage }} (see artifacts) |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ inputs.generate_coverage_report }}" == "true" ]; then
+            echo "| Coverage Report | ⚠️ Generation attempted |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Coverage Report | ⏭️ Disabled |" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Checks Performed:**" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Dependency verification (\`go mod verify\`)" >> $GITHUB_STEP_SUMMARY
@@ -153,7 +201,10 @@ jobs:
           echo "- ✅ Code formatting check (\`gofmt\`)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Unit tests with race detection (\`go test -race\`)" >> $GITHUB_STEP_SUMMARY
           if [ "${{ inputs.upload_coverage }}" == "true" ]; then
-            echo "- ✅ Coverage report generated and uploaded" >> $GITHUB_STEP_SUMMARY
+            echo "- ✅ Coverage report generated and uploaded to Codecov" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.generate_coverage_report }}" == "true" ]; then
+            echo "- ✅ Coverage report generated (text and HTML) - available as artifact" >> $GITHUB_STEP_SUMMARY
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ "${{ github.event_name }}" == "pull_request" ] && [ "${{ steps.fmt-check.outputs.needs_formatting }}" == "true" ]; then
