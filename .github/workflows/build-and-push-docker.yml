@@ -30,6 +30,21 @@ on:
         required: false
         type: boolean
         default: true
+      include_sha_tags:
+        description: 'Include SHA tags (short commit hash)'
+        required: false
+        type: boolean
+        default: true
+      include_branch_tags:
+        description: 'Include branch tags (branch name)'
+        required: false
+        type: boolean
+        default: true
+      include_pr_tags:
+        description: 'Include PR tags (pull request number)'
+        required: false
+        type: boolean
+        default: true
       scan_image:
         description: 'Scan image'
         required: false
@@ -40,6 +55,11 @@ on:
         required: false
         type: string
         default: '1'
+      skip_if_semver_exists:
+        description: 'Skip pushing semantic version tags (e.g., 1.0.0) if they already exist in registry'
+        required: false
+        type: boolean
+        default: false
     secrets:
       REGISTRY_USERNAME:
         description: 'Registry username'
@@ -82,15 +102,60 @@ jobs:
           username: ${{ secrets.REGISTRY_USERNAME }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
+      - name: Check if semantic version tags exist
+        id: check-semver-tags
+        if: inputs.push_image && inputs.skip_if_semver_exists && inputs.include_semver_tags && github.ref_type == 'tag'
+        run: |
+          # Extract version from tag (e.g., v1.0.0 -> 1.0.0)
+          VERSION_TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${VERSION_TAG#v}"  # Remove 'v' prefix if present
+          
+          IMAGE_NAME="${{ inputs.registry }}/${{ inputs.image_name }}"
+          
+          echo "🔍 Checking if semantic version tags exist for version: $VERSION"
+          echo "Image: $IMAGE_NAME"
+          
+          # Check if the full version tag exists (e.g., 1.0.0)
+          FULL_VERSION_TAG="${IMAGE_NAME}:${VERSION}"
+          FULL_EXISTS="false"
+          if docker manifest inspect "$FULL_VERSION_TAG" &>/dev/null; then
+            FULL_EXISTS="true"
+            echo "⚠️ Tag $VERSION already exists in registry"
+          else
+            echo "✅ Tag $VERSION does not exist, will push"
+          fi
+          
+          # Check if major.minor tag exists (e.g., 1.0)
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1,2)
+          MAJOR_MINOR_TAG="${IMAGE_NAME}:${MAJOR_MINOR}"
+          MAJOR_MINOR_EXISTS="false"
+          if docker manifest inspect "$MAJOR_MINOR_TAG" &>/dev/null; then
+            MAJOR_MINOR_EXISTS="true"
+            echo "⚠️ Tag $MAJOR_MINOR already exists in registry"
+          else
+            echo "✅ Tag $MAJOR_MINOR does not exist, will push"
+          fi
+          
+          echo "full_version_exists=$FULL_EXISTS" >> $GITHUB_OUTPUT
+          echo "major_minor_exists=$MAJOR_MINOR_EXISTS" >> $GITHUB_OUTPUT
+          
+          # If both exist, skip pushing
+          if [ "$FULL_EXISTS" == "true" ] && [ "$MAJOR_MINOR_EXISTS" == "true" ]; then
+            echo "skip_push=true" >> $GITHUB_OUTPUT
+            echo "⏭️ Both semantic version tags exist, skipping push"
+          else
+            echo "skip_push=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ inputs.registry }}/${{ inputs.image_name }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=sha,format=short
+            type=ref,event=branch,enable=${{ inputs.include_branch_tags }}
+            type=ref,event=pr,enable=${{ inputs.include_pr_tags }}
+            type=sha,format=short,enable=${{ inputs.include_sha_tags }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}},enable=${{ inputs.include_semver_tags }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ inputs.include_semver_tags }}
@@ -169,7 +234,15 @@ jobs:
         id: docker_push
         if: |
           inputs.push_image &&
-          ((inputs.scan_image && steps.trivy_scan_table.outcome == 'success') || !inputs.scan_image)
+          (
+            !inputs.skip_if_semver_exists ||
+            steps.check-semver-tags.outputs.skip_push != 'true' ||
+            steps.check-semver-tags.outcome == 'skipped'
+          ) &&
+          (
+            !inputs.scan_image ||
+            steps.trivy_scan_table.outcome == 'success'
+          )
         uses: docker/build-push-action@v5
         with:
           context: ${{ inputs.context_path }}          # Path to the Dockerfile
@@ -197,8 +270,14 @@ jobs:
           else
             echo "| Image Scan | ⏭️ Disabled |" >> $GITHUB_STEP_SUMMARY
           fi
-          if [ "${{ inputs.push_image }}" == "true" ] && [ "${{ steps.docker_push.outcome }}" == "success" ]; then
-            echo "| Image Pushed | ✅ Yes |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.push_image }}" == "true" ]; then
+            if [ "${{ steps.check-semver-tags.outputs.skip_push }}" == "true" ]; then
+              echo "| Image Pushed | ⏭️ Skipped (semantic version tags already exist) |" >> $GITHUB_STEP_SUMMARY
+            elif [ "${{ steps.docker_push.outcome }}" == "success" ]; then
+              echo "| Image Pushed | ✅ Yes |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Image Pushed | ❌ No |" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "| Image Pushed | ❌ No |" >> $GITHUB_STEP_SUMMARY
           fi
@@ -207,6 +286,31 @@ jobs:
           echo "**Image**: \`${{ inputs.registry }}/${{ inputs.image_name }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Build Context**: \`${{ inputs.context_path }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Platforms**: \`${{ inputs.platforms }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag Types Enabled:**" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.include_semver_tags }}" == "true" ]; then
+            echo "- ✅ Semantic version tags (e.g., 1.0.0, 1.0)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⏭️ Semantic version tags (disabled)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.include_sha_tags }}" == "true" ]; then
+            echo "- ✅ SHA tags (short commit hash)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⏭️ SHA tags (disabled)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.include_branch_tags }}" == "true" ]; then
+            echo "- ✅ Branch tags (branch name)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⏭️ Branch tags (disabled)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ inputs.include_pr_tags }}" == "true" ]; then
+            echo "- ✅ PR tags (pull request number)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⏭️ PR tags (disabled)" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ github.ref }}" == "refs/heads/main" ] || [ "${{ github.ref }}" == "refs/heads/master" ]; then
+            echo "- ✅ Latest tag (default branch)" >> $GITHUB_STEP_SUMMARY
+          fi
           if [ "${{ steps.docker_push.outcome }}" == "success" ] && [ -n "${{ steps.meta.outputs.tags }}" ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Generated Tags**:\`\`\`" >> $GITHUB_STEP_SUMMARY
