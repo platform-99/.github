@@ -118,6 +118,31 @@ jobs:
             org.opencontainers.image.vendor="Platform 99"
             org.opencontainers.image.licenses="https://github.com/${{ github.repository }}/blob/main/LICENSE.md"
 
+      - name: Validate tags are generated
+        if: inputs.push_image
+        run: |
+          echo "📋 Validating generated tags..."
+          TAGS="${{ steps.meta.outputs.tags }}"
+          if [ -z "$TAGS" ] || [ "$TAGS" == "" ]; then
+            echo "❌ ERROR: No tags generated! Cannot push untagged images."
+            echo ""
+            echo "Tag configuration:"
+            echo "  - include_semver_tags: ${{ inputs.include_semver_tags }}"
+            echo "  - include_sha_tags: ${{ inputs.include_sha_tags }}"
+            echo "  - include_branch_tags: ${{ inputs.include_branch_tags }}"
+            echo "  - include_pr_tags: ${{ inputs.include_pr_tags }}"
+            echo "  - Event: ${{ github.event_name }}"
+            echo "  - Ref: ${{ github.ref }}"
+            echo "  - Ref type: ${{ github.ref_type }}"
+            echo ""
+            echo "At least one tag type must be enabled to push images."
+            exit 1
+          fi
+          echo "✅ Tags generated successfully:"
+          echo "$TAGS" | while IFS= read -r tag; do
+            echo "  - $tag"
+          done
+
       # Build image for scanning (single platform, loaded locally)
       - name: Build image for scanning
         if: inputs.scan_image
@@ -255,7 +280,22 @@ jobs:
 
       - name: Image digest
         if: inputs.push_image && steps.docker_push.outcome == 'success'
-        run: echo "Image pushed with digest ${{ steps.docker_push.outputs.digest }}"
+        run: |
+          echo "📦 Image pushed with digest: ${{ steps.docker_push.outputs.digest }}"
+          echo "📍 Full image reference: ${{ inputs.registry }}/${{ inputs.image_name }}@${{ steps.docker_push.outputs.digest }}"
+
+      # - name: Clean up untagged images
+      #   if: always()
+      #   run: |
+      #     echo "🧹 Cleaning up local untagged Docker images..."
+      #     # Remove untagged/dangling images locally (these are intermediate build artifacts)
+      #     UNTAGGED_COUNT=$(docker images -f "dangling=true" -q 2>/dev/null | wc -l || echo "0")
+      #     if [ "$UNTAGGED_COUNT" -gt 0 ]; then
+      #       docker image prune -f
+      #       echo "✅ Removed $UNTAGGED_COUNT untagged local image(s)"
+      #     else
+      #       echo "ℹ️  No untagged local images to clean up"
+      #     fi
 
       - name: Build Summary
         if: always()
