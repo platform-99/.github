@@ -82,12 +82,47 @@ jobs:
 
       - name: Extract vulnerability count
         id: vuln-count
-        if: always()
+        if: always() && steps.check-sarif.outputs.exists == 'true'
         run: |
-          # Count vulnerabilities from the scan output (look for table rows with severity levels)
-          # This is a simple heuristic - actual count would require parsing JSON/SARIF
-          echo "count=0" >> $GITHUB_OUTPUT
-          echo "⚠️ For detailed vulnerability information, check the workflow logs above or the GitHub Security tab."
+          if [ -f "trivy-source-results.sarif" ]; then
+            # Check if jq is available, install if not
+            if ! command -v jq &> /dev/null; then
+              sudo apt-get update && sudo apt-get install -y jq
+            fi
+            
+            # Parse SARIF JSON to count vulnerabilities
+            # SARIF structure: runs[].results[] contains the vulnerabilities
+            TOTAL_COUNT=$(jq '[.runs[].results[]] | length' trivy-source-results.sarif 2>/dev/null || echo "0")
+            
+            # Count by severity level (error = critical, warning = high in SARIF)
+            CRITICAL_COUNT=$(jq '[.runs[].results[] | select(.level == "error")] | length' trivy-source-results.sarif 2>/dev/null || echo "0")
+            HIGH_COUNT=$(jq '[.runs[].results[] | select(.level == "warning")] | length' trivy-source-results.sarif 2>/dev/null || echo "0")
+            
+            # If jq parsing fails, try alternative method
+            if [ "$TOTAL_COUNT" == "0" ] || [ -z "$TOTAL_COUNT" ] || [ "$TOTAL_COUNT" == "null" ]; then
+              # Fallback: count results array directly from first run
+              TOTAL_COUNT=$(jq '.runs[0].results | length' trivy-source-results.sarif 2>/dev/null || echo "0")
+            fi
+            
+            # Ensure we have valid numbers
+            TOTAL_COUNT=${TOTAL_COUNT:-0}
+            CRITICAL_COUNT=${CRITICAL_COUNT:-0}
+            HIGH_COUNT=${HIGH_COUNT:-0}
+            
+            echo "total=$TOTAL_COUNT" >> $GITHUB_OUTPUT
+            echo "critical=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+            echo "high=$HIGH_COUNT" >> $GITHUB_OUTPUT
+            
+            echo "📊 Vulnerability count extracted:"
+            echo "  Total: $TOTAL_COUNT"
+            echo "  Critical: $CRITICAL_COUNT"
+            echo "  High: $HIGH_COUNT"
+          else
+            echo "total=0" >> $GITHUB_OUTPUT
+            echo "critical=0" >> $GITHUB_OUTPUT
+            echo "high=0" >> $GITHUB_OUTPUT
+            echo "⚠️ SARIF file not found, cannot extract count"
+          fi
 
       - name: Security Scan Summary
         if: always()
@@ -100,6 +135,18 @@ jobs:
           echo "| Scan Type | \`${{ inputs.scan_type }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Scan Path | \`${{ inputs.scan_path }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Severity Threshold | \`${{ inputs.severity }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ steps.vuln-count.outputs.total }}" ] && [ "${{ steps.vuln-count.outputs.total }}" != "0" ]; then
+            VULN_COUNT="${{ steps.vuln-count.outputs.total }}"
+            CRITICAL_COUNT="${{ steps.vuln-count.outputs.critical }}"
+            HIGH_COUNT="${{ steps.vuln-count.outputs.high }}"
+            if [ "$CRITICAL_COUNT" != "0" ] || [ "$HIGH_COUNT" != "0" ]; then
+              echo "| Vulnerabilities Found | ⚠️ **$VULN_COUNT** ($CRITICAL_COUNT Critical, $HIGH_COUNT High) |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| Vulnerabilities Found | ✅ **$VULN_COUNT** |" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "| Vulnerabilities Found | ✅ **0** (none found) |" >> $GITHUB_STEP_SUMMARY
+          fi
           if [ "${{ inputs.upload_to_github }}" == "true" ]; then
             if [ "${{ steps.check-sarif.outputs.exists }}" == "true" ]; then
               if [ "${{ steps.upload-sarif.outcome }}" == "success" ]; then
