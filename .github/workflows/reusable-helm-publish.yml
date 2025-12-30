@@ -15,6 +15,10 @@ on:
         description: 'OCI registry URL for publishing chart'
         required: false
         type: string
+      registry_owner:
+        description: 'Registry owner/organization (required for GHCR, e.g., platform-99)'
+        required: false
+        type: string
       publish_chart:
         description: 'Whether to publish the chart'
         required: false
@@ -123,9 +127,19 @@ jobs:
           CHART_NAME="${{ steps.chart-name.outputs.name }}"
           CHART_VERSION="${{ steps.chart-version.outputs.version }}"
           
+          # For GHCR, we need to include the registry owner in the path
+          # Format: ghcr.io/OWNER/CHART_NAME
+          if [[ "${{ inputs.registry }}" == *"ghcr.io"* ]] && [ -n "${{ inputs.registry_owner }}" ]; then
+            REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/$CHART_NAME"
+          else
+            # For other registries or if owner not specified, use the chart name directly
+            REGISTRY_PATH="${{ inputs.registry }}/$CHART_NAME"
+          fi
+          
           echo "📤 Publishing chart to OCI registry..."
-          helm push $CHART_FILE oci://${{ inputs.registry }}/$CHART_NAME
-          echo "✅ Chart published to oci://${{ inputs.registry }}/$CHART_NAME:$CHART_VERSION"
+          echo "Registry path: oci://$REGISTRY_PATH"
+          helm push $CHART_FILE oci://$REGISTRY_PATH
+          echo "✅ Chart published to oci://$REGISTRY_PATH:$CHART_VERSION"
 
       - name: Chart publish summary
         if: always()
