@@ -13,7 +13,7 @@ on:
         required: false
         type: string
         default: '1.21'
-      upload_coverage:
+      upload_coverage_to_codecov:
         description: 'Whether to upload coverage to Codecov'
         required: false
         type: boolean
@@ -139,7 +139,7 @@ jobs:
 
       - name: Extract project name
         id: project-name
-        if: inputs.upload_coverage && always()
+        if: inputs.upload_coverage_to_codecov && steps.run-tests.outcome == 'success'
         run: |
           PROJECT_NAME=$(basename "${{ inputs.working_directory }}")
           # Remove leading dot and slash if present
@@ -147,7 +147,7 @@ jobs:
           echo "name=$PROJECT_NAME" >> $GITHUB_OUTPUT
 
       - name: Upload coverage
-        if: inputs.upload_coverage && always()
+        if: inputs.upload_coverage_to_codecov && steps.run-tests.outcome == 'success'
         id: upload-coverage
         uses: codecov/codecov-action@v4
         with:
@@ -182,7 +182,7 @@ jobs:
           fi
           if [ "${{ steps.upload-coverage.outcome }}" == "success" ]; then
             echo "| Coverage Upload | ✅ Uploaded to Codecov |" >> $GITHUB_STEP_SUMMARY
-          elif [ "${{ inputs.upload_coverage }}" == "true" ]; then
+          elif [ "${{ inputs.upload_coverage_to_codecov }}" == "true" ]; then
             echo "| Coverage Upload | ⚠️ Upload attempted (may have failed) |" >> $GITHUB_STEP_SUMMARY
           else
             echo "| Coverage Upload | ⏭️ Disabled |" >> $GITHUB_STEP_SUMMARY
@@ -200,7 +200,7 @@ jobs:
           echo "- ✅ Static analysis (\`go vet\`)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Code formatting check (\`gofmt\`)" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ Unit tests with race detection (\`go test -race\`)" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ inputs.upload_coverage }}" == "true" ]; then
+          if [ "${{ inputs.upload_coverage_to_codecov }}" == "true" ]; then
             echo "- ✅ Coverage report generated and uploaded to Codecov" >> $GITHUB_STEP_SUMMARY
           fi
           if [ "${{ inputs.generate_coverage_report }}" == "true" ]; then
