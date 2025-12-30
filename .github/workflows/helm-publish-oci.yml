@@ -137,7 +137,7 @@ jobs:
           CHART_NAME="${{ steps.chart-name.outputs.name }}"
           CHART_VERSION="${{ steps.chart-version.outputs.version }}"
           
-          # Build registry path
+          # Build registry path (same logic as publish step)
           if [[ "${{ inputs.registry }}" == *"ghcr.io"* ]] && [ -n "${{ inputs.registry_owner }}" ]; then
             if [ -n "${{ inputs.registry_namespace }}" ]; then
               REGISTRY_PATH="${{ inputs.registry }}/${{ inputs.registry_owner }}/${{ inputs.registry_namespace }}/$CHART_NAME"
@@ -155,17 +155,12 @@ jobs:
           echo "🔍 Checking if chart version $CHART_VERSION already exists in registry..."
           echo "Registry path: oci://$REGISTRY_PATH"
           
-          # Try to show the chart - if it succeeds, the version exists
+          # helm show chart with --version will succeed only if that exact version exists
+          # If it fails, the version doesn't exist (or chart doesn't exist, which is the same for our purposes)
           if helm show chart "oci://$REGISTRY_PATH" --version "$CHART_VERSION" &>/dev/null; then
-            EXISTING_VERSION=$(helm show chart "oci://$REGISTRY_PATH" --version "$CHART_VERSION" 2>/dev/null | grep '^version:' | awk '{print $2}' || echo "")
-            if [ "$EXISTING_VERSION" == "$CHART_VERSION" ]; then
-              echo "exists=true" >> $GITHUB_OUTPUT
-              echo "⚠️ Chart version $CHART_VERSION already exists in registry"
-              echo "Skipping publish (skip_if_exists is enabled)"
-            else
-              echo "exists=false" >> $GITHUB_OUTPUT
-              echo "✅ Chart version $CHART_VERSION does not exist, will publish"
-            fi
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Chart version $CHART_VERSION already exists in registry"
+            echo "Skipping publish (skip_if_exists is enabled)"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
             echo "✅ Chart version $CHART_VERSION does not exist, will publish"
