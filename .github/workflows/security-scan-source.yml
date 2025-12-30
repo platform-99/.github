@@ -61,6 +61,7 @@ jobs:
 
       - name: Upload Trivy results to GitHub Security
         if: inputs.upload_to_github && always() && steps.check-sarif.outputs.exists == 'true'
+        id: upload-sarif
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'trivy-source-results.sarif'
@@ -68,3 +69,33 @@ jobs:
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Security Scan Summary
+        if: always()
+        run: |
+          echo "### 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan Type | \`${{ inputs.scan_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan Path | \`${{ inputs.scan_path }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Severity Threshold | \`${{ inputs.severity }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.upload_to_github }}" == "true" ]; then
+            if [ "${{ steps.check-sarif.outputs.exists }}" == "true" ]; then
+              if [ "${{ steps.upload-sarif.outcome }}" == "success" ]; then
+                echo "| Results Uploaded | ✅ Yes (GitHub Security) |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| Results Uploaded | ⚠️ Attempted (may have failed) |" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "| Results Uploaded | ❌ No (SARIF file not found) |" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "| Results Uploaded | ⏭️ Disabled |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 🔍 Trivy scans for vulnerabilities in source code. Results are filtered to show only \`${{ inputs.severity }}\` severity issues." >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.upload_to_github }}" == "true" ]; then
+            echo "> 📊 Results are uploaded to GitHub Security tab for review." >> $GITHUB_STEP_SUMMARY
+          fi

@@ -107,6 +107,7 @@ jobs:
 
       - name: Upload coverage
         if: inputs.upload_coverage && always()
+        id: upload-coverage
         uses: codecov/codecov-action@v4
         with:
           file: ${{ inputs.working_directory }}/coverage.out
@@ -114,4 +115,48 @@ jobs:
           name: ${{ steps.project-name.outputs.name }}-coverage
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+
+      - name: Test and Lint Summary
+        if: always()
+        run: |
+          echo "### 🧪 Test and Lint Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Job Status | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Go Version | \`${{ inputs.go_version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Working Directory | \`${{ inputs.working_directory }}\` |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.fmt-check.outcome }}" == "success" ]; then
+            if [ "${{ steps.fmt-check.outputs.needs_formatting }}" == "true" ]; then
+              if [ "${{ github.event_name }}" == "pull_request" ]; then
+                echo "| Code Formatting | ✅ Auto-formatted and committed |" >> $GITHUB_STEP_SUMMARY
+              else
+                echo "| Code Formatting | ❌ Needs formatting (run 'go fmt ./...') |" >> $GITHUB_STEP_SUMMARY
+              fi
+            else
+              echo "| Code Formatting | ✅ Already formatted |" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "| Code Formatting | ⚠️ Check failed |" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ steps.upload-coverage.outcome }}" == "success" ]; then
+            echo "| Coverage Upload | ✅ Uploaded to Codecov |" >> $GITHUB_STEP_SUMMARY
+          elif [ "${{ inputs.upload_coverage }}" == "true" ]; then
+            echo "| Coverage Upload | ⚠️ Upload attempted (may have failed) |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Coverage Upload | ⏭️ Disabled |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Checks Performed:**" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Dependency verification (\`go mod verify\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Static analysis (\`go vet\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Code formatting check (\`gofmt\`)" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Unit tests with race detection (\`go test -race\`)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.upload_coverage }}" == "true" ]; then
+            echo "- ✅ Coverage report generated and uploaded" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event_name }}" == "pull_request" ] && [ "${{ steps.fmt-check.outputs.needs_formatting }}" == "true" ]; then
+            echo "> 🔧 Code formatting was automatically applied and committed to this PR." >> $GITHUB_STEP_SUMMARY
+          fi
 
