@@ -1,0 +1,164 @@
+name: Terraform (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: 'Working directory for Terraform operations'
+        required: false
+        type: string
+        default: '.'
+      terraform_version:
+        description: 'Terraform version to use'
+        required: false
+        type: string
+        default: '1.9.5'
+      examples:
+        description: 'JSON array of example directories to validate (e.g., ["advanced-configuration","basic-s3"])'
+        required: false
+        type: string
+      examples_base_path:
+        description: 'Base path for examples directory (default: examples)'
+        required: false
+        type: string
+        default: 'examples'
+      run_format_check:
+        description: 'Run terraform fmt check'
+        required: false
+        type: boolean
+        default: true
+      run_validate:
+        description: 'Run terraform validate'
+        required: false
+        type: boolean
+        default: true
+      run_docs:
+        description: 'Generate terraform-docs and push to PR'
+        required: false
+        type: boolean
+        default: true
+      terraform_docs_config:
+        description: 'Path to terraform-docs config file'
+        required: false
+        type: string
+        default: '.terraform-docs.yml'
+      terraform_docs_output_file:
+        description: 'Output file for terraform-docs'
+        required: false
+        type: string
+        default: 'README.md'
+      terraform_docs_output_method:
+        description: 'Output method for terraform-docs (inject, replace, etc.)'
+        required: false
+        type: string
+        default: 'inject'
+
+jobs:
+  # Check formatting for all Terraform files
+  format-check:
+    name: Format Check
+    runs-on: ubuntu-latest
+    if: inputs.run_format_check
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Terraform Format Check
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform fmt -check -recursive
+
+  # Validate examples using matrix strategy
+  validate-examples:
+    name: Validate ${{ matrix.example }}
+    runs-on: ubuntu-latest
+    needs: [format-check]
+    if: inputs.run_validate && inputs.examples != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        example: ${{ fromJSON(inputs.examples) }}
+
+    permissions:
+      contents: read
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_CLI_ARGS: "-no-color"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Validate ${{ matrix.example }} Example
+        working-directory: ${{ inputs.working_directory }}/${{ inputs.examples_base_path }}/${{ matrix.example }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  # Validate main Terraform code (if no examples specified)
+  validate:
+    name: Validate Terraform
+    runs-on: ubuntu-latest
+    needs: [format-check]
+    if: inputs.run_validate && (inputs.examples == '' || inputs.examples == null)
+    permissions:
+      contents: read
+
+    env:
+      TF_IN_AUTOMATION: true
+      TF_CLI_ARGS: "-no-color"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Validate Terraform
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  # Generate terraform-docs
+  generate-docs:
+    name: Generate Documentation
+    runs-on: ubuntu-latest
+    if: inputs.run_docs && github.event_name == 'pull_request'
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+
+      - name: Render terraform docs inside the README.md and push changes back to PR branch
+        uses: terraform-docs/gh-actions@v1.4.1
+        with:
+          working-dir: ${{ inputs.working_directory }}
+          config-file: ${{ inputs.terraform_docs_config }}
+          output-file: ${{ inputs.terraform_docs_output_file }}
+          output-method: ${{ inputs.terraform_docs_output_method }}
+          git-push: "true"
+

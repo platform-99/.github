@@ -1,0 +1,73 @@
+name: Helm Chart Publish to GitHub Pages (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      charts_dir:
+        description: 'Directory containing Helm charts (chart-releaser expects a directory of chart directories)'
+        required: true
+        type: string
+      skip_existing:
+        description: 'Skip charts that already have a release for the current version'
+        required: false
+        type: boolean
+        default: true
+      config:
+        description: 'Path to chart-releaser config file (cr.yaml)'
+        required: false
+        type: string
+      version:
+        description: 'Only release charts matching this version (optional)'
+        required: false
+        type: string
+      commit:
+        description: 'Target commit to check for chart changes (defaults to HEAD)'
+        required: false
+        type: string
+
+jobs:
+  release:
+    name: Release Helm Charts
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    
+    outputs:
+      charts_released: ${{ steps.chart-releaser.outputs.charts_released }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for chart-releaser
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Run chart-releaser
+        id: chart-releaser
+        uses: helm/chart-releaser-action@v1.7.0
+        with:
+          charts_dir: ${{ inputs.charts_dir }}       # directory containing Helm charts
+          config: ${{ inputs.config }}               # path to chart-releaser config file (cr.yaml)
+          skip_existing: ${{ inputs.skip_existing }} # skip charts that already have a release for the current version
+          version: ${{ inputs.version }}             # only release charts matching this version
+          commit: ${{ inputs.commit }}               # target commit to check for chart changes (defaults to HEAD)
+        env:
+          CR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        if: always()
+        run: |
+          echo "### 📦 Helm Chart Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Charts Directory**: \`${{ inputs.charts_dir }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Charts Released**: ${{ steps.chart-releaser.outputs.charts_released || 'See chart-releaser output' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> 📋 Charts are published to GitHub Releases and available via GitHub Pages." >> $GITHUB_STEP_SUMMARY
+          echo "> To use: \`helm repo add <name> https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}\`" >> $GITHUB_STEP_SUMMARY
+

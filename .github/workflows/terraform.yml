@@ -1,0 +1,31 @@
+name: Terraform Pipeline
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars"
+      - "**/*.tf.json"
+      - "**/terraform.tfstate*"
+  pull_request:
+    branches: ["*"]  # Run on PRs targeting any branch
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars"
+      - "**/*.tf.json"
+      - "**/terraform.tfstate*"
+
+jobs:
+  terraform:
+    uses: platform-99/platform-99/.github/.github/workflows/iac/terraform-reusable.yml@main
+    with:
+      terraform_version: '1.9.5'
+      examples: '["advanced-configuration","basic-cloudwatch","basic-s3","comprehensive","existing-destination"]'
+      examples_base_path: 'examples'
+      run_format_check: true
+      run_validate: true
+      run_docs: true
+      terraform_docs_config: '.terraform-docs.yml'
+      terraform_docs_output_file: 'README.md'
+      terraform_docs_output_method: 'inject'
