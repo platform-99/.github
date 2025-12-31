@@ -1,0 +1,163 @@
+name: Reusable JFrog Docker Build and Scan
+
+on:
+  workflow_call:
+    inputs:
+      registry:
+        required: true
+        type: string
+      image_name:
+        required: true
+        type: string
+      app_path:
+        required: false
+        type: string
+        default: "."
+    secrets:
+      JFROG_USERNAME:
+        required: true
+      JFROG_JWT_TOKEN:
+        required: true
+
+jobs:
+  build-and-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    env:
+      JFROG_BUILD_NAME: ${{ inputs.image_name }}-app
+      JFROG_BUILD_NUMBER: ${{ github.run_number }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract tag name
+        id: tag
+        if: github.ref_type == 'tag'
+        run: |
+          # Extract tag name (e.g., refs/tags/v1.0.0 -> v1.0.0)
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "✅ Detected tag: $TAG_NAME"
+
+      - name: Setup JFrog CLI
+        uses: jfrog/setup-jfrog-cli@v4
+        env:
+          JF_URL: https://${{ inputs.registry }}
+          JF_USER: ${{ secrets.JFROG_USERNAME }}
+          JF_ACCESS_TOKEN: ${{ secrets.JFROG_JWT_TOKEN }}
+
+      - name: Docker login
+        run: |
+          echo "${{ secrets.JFROG_JWT_TOKEN }}" | docker login ${{ inputs.registry }} \
+            --username "${{ secrets.JFROG_USERNAME }}" --password-stdin
+
+      # Scan dependencies for vulnerabilities
+      - name: Scan Dependencies
+        run: |
+          cd ${{ inputs.app_path }}
+          jf audit --format=simple || echo "Issues found"
+
+      - name: Build and Push image
+        id: build
+        run: |
+          BASE_IMAGE=${{ inputs.registry }}/${{ inputs.image_name }}
+          SHA_TAG="${BASE_IMAGE}:${{ github.sha }}"
+          
+          # Build image with SHA tag
+          docker build -f ${{ inputs.app_path }}/Dockerfile -t $SHA_TAG ${{ inputs.app_path }}
+          
+          # Push SHA tag
+          echo "📦 Pushing image with SHA tag: $SHA_TAG"
+          jf docker push $SHA_TAG ${{ inputs.registry }}/${{ inputs.image_name }} --build-name=$JFROG_BUILD_NAME --build-number=$JFROG_BUILD_NUMBER
+          
+          # If tag event, also tag and push with the tag name
+          if [ -n "${{ steps.tag.outputs.tag }}" ]; then
+            TAG_NAME="${{ steps.tag.outputs.tag }}"
+            TAG_IMAGE="${BASE_IMAGE}:${TAG_NAME}"
+            docker tag $SHA_TAG $TAG_IMAGE
+            echo "📦 Pushing image with tag: $TAG_IMAGE"
+            jf docker push $TAG_IMAGE ${{ inputs.registry }}/${{ inputs.image_name }} --build-name=$JFROG_BUILD_NAME --build-number=$JFROG_BUILD_NUMBER
+          fi
+
+      # Publish build information to JFrog
+      - name: Publish Build Info
+        run: |
+          jf rt build-add-git $JFROG_BUILD_NAME $JFROG_BUILD_NUMBER
+          jf rt build-publish $JFROG_BUILD_NAME $JFROG_BUILD_NUMBER
+
+      - name: Scan with JFrog Xray
+        id: scan
+        run: |
+          # Scan the SHA-tagged image (always available)
+          IMAGE_TAG=${{ inputs.registry }}/${{ inputs.image_name }}:${{ github.sha }}
+          jf docker scan $IMAGE_TAG
+          
+          # If tag event, also scan the tag-named image
+          if [ -n "${{ steps.tag.outputs.tag }}" ]; then
+            TAG_IMAGE=${{ inputs.registry }}/${{ inputs.image_name }}:${{ steps.tag.outputs.tag }}
+            echo "🔍 Scanning tag-named image: $TAG_IMAGE"
+            jf docker scan $TAG_IMAGE
+          fi
+
+      - name: Build Summary
+        if: always()
+        run: |
+          echo "## 📋 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Image Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Registry:** \`${{ inputs.registry }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Name:** \`${{ inputs.image_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Name:** \`$JFROG_BUILD_NAME\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Number:** \`$JFROG_BUILD_NUMBER\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Image Tags" >> $GITHUB_STEP_SUMMARY
+          SHA_IMAGE="${{ inputs.registry }}/${{ inputs.image_name }}:${{ github.sha }}"
+          echo "- **SHA Tag:** \`$SHA_IMAGE\`" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "${{ steps.tag.outputs.tag }}" ]; then
+            TAG_IMAGE="${{ inputs.registry }}/${{ inputs.image_name }}:${{ steps.tag.outputs.tag }}"
+            echo "- **Tag:** \`$TAG_IMAGE\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Build Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit SHA:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Ref:** \`${{ github.ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Event:** \`${{ github.event_name }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ steps.tag.outputs.tag }}" ]; then
+            echo "- **Git Tag:** \`${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### Steps Status" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.build.outcome }}" == "success" ]; then
+            echo "- ✅ Build and Push: **Success**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ❌ Build and Push: **Failed**" >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${{ steps.scan.outcome }}" == "success" ]; then
+            echo "- ✅ Xray Scan: **Success**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- ⚠️ Xray Scan: **${{ steps.scan.outcome }}**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  frogbot:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run Frogbot
+        uses: jfrog/frogbot@v2
+        env:
+          JF_URL: https://${{ inputs.registry }}
+          JF_ACCESS_TOKEN: ${{ secrets.JFROG_JWT_TOKEN }}
+          JF_GIT_TOKEN: ${{ secrets.GITHUB_TOKEN }}
