@@ -1,0 +1,234 @@
+name: Terraform Apply with Approval (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment_folders:
+        description: 'Space-separated list of environment folder names (e.g., "1-dev 2-test 3-prod")'
+        required: true
+        type: string
+      terraform_version:
+        description: 'Terraform version to use'
+        required: false
+        type: string
+        default: '1.6.0'
+      working_directory:
+        description: 'Working directory for the repository (defaults to root)'
+        required: false
+        type: string
+        default: '.'
+      github_environment:
+        description: 'GitHub environment name for approval gate (e.g., "production", "staging")'
+        required: true
+        type: string
+      approval_timeout_minutes:
+        description: 'Maximum time to wait for approval in minutes (default: 60 minutes, 0 = 360 minutes/6 hours)'
+        required: false
+        type: number
+        default: 60
+      selected_environment:
+        description: 'Selected environment for workflow_dispatch (optional)'
+        required: false
+        type: string
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read   # Required to read the repository contents
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT_FOLDERS: ${{ inputs.environment_folders }}
+    outputs:
+      environments: ${{ steps.filter.outputs.environments }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history to access previous commits
+
+      - name: Detect modified environments
+        id: filter
+        run: |
+          ENVIRONMENTS=""
+          
+          # If selected_environment is provided (workflow_dispatch), use it
+          if [ -n "${{ inputs.selected_environment }}" ]; then
+            ENVIRONMENTS="${{ inputs.selected_environment }}"
+          elif [ "${{ github.event_name }}" == "push" ]; then
+            # For push events, use github.event.before and github.sha
+            BASE_REF="${{ github.event.before }}"
+            HEAD_REF="${{ github.sha }}"
+            
+            # Validate that base ref is not the null commit
+            if [ -n "$BASE_REF" ] && [ "$BASE_REF" != "0000000000000000000000000000000000000000" ]; then
+              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+            else
+              echo "Warning: Base ref is null commit or not available, checking all files in current commit"
+              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+            fi
+            
+            # Check which environment folders have changes
+            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+              fi
+            done
+          else
+            # For other events (workflow_dispatch without selected_environment), try to detect from git history
+            if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+              BASE_REF="HEAD~1"
+              HEAD_REF="HEAD"
+              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+              
+              for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+                if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                  ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+                fi
+              done
+            else
+              # If no previous commit exists, check all files in current commit
+              echo "No previous commit found, checking all files in current commit"
+              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+              
+              for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+                if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                  ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+                fi
+              done
+            fi
+          fi
+          
+          # Remove leading space and convert to JSON array
+          ENVIRONMENTS=$(echo "$ENVIRONMENTS" | xargs)
+          if [ -z "$ENVIRONMENTS" ]; then
+            ENVIRONMENTS="[]"
+          else
+            # Convert space-separated list to JSON array
+            ENVIRONMENTS_ARRAY=""
+            for env in $ENVIRONMENTS; do
+              if [ -z "$ENVIRONMENTS_ARRAY" ]; then
+                ENVIRONMENTS_ARRAY="\"$env\""
+              else
+                ENVIRONMENTS_ARRAY="$ENVIRONMENTS_ARRAY,\"$env\""
+              fi
+            done
+            ENVIRONMENTS="[$ENVIRONMENTS_ARRAY]"
+          fi
+          
+          echo "environments=$ENVIRONMENTS" >> $GITHUB_OUTPUT
+          echo "Detected environments: $ENVIRONMENTS"
+
+  plan:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.environments != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.detect-changes.outputs.environments) }}
+      fail-fast: false
+    name: Create a plan for ${{ matrix.environment }}
+    env:
+      TF_DIR: ${{ matrix.environment }}
+      ARM_USE_OIDC: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform plan -no-color -out=tfplan
+
+      - name: Upload Plan Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ matrix.environment }}
+          path: ${{ inputs.working_directory }}/${{ env.TF_DIR }}/tfplan
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Terraform Plan Output
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        run: |
+          terraform show -no-color tfplan > plan_output.txt || echo "No changes to infrastructure." > plan_output.txt
+          echo "## Terraform Plan for ${{ env.TF_DIR }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Show Plan</summary>" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          cat plan_output.txt >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
+
+  apply:
+    needs: [detect-changes, plan]
+    if: needs.detect-changes.outputs.environments != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.approval_timeout_minutes }}
+    environment: ${{ inputs.github_environment }}
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.detect-changes.outputs.environments) }}
+      fail-fast: false
+    name: Apply terraform configuration for ${{ matrix.environment }}
+    env:
+      TF_DIR: ${{ matrix.environment }}
+      ARM_USE_OIDC: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Download Plan Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ matrix.environment }}
+          path: ${{ inputs.working_directory }}
+          merge-multiple: false
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform apply -no-color tfplan
