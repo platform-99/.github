@@ -1,0 +1,164 @@
+name: Terraform Apply (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment_folders:
+        description: 'Space-separated list of environment folder names (e.g., "1-dev 2-test 3-prod")'
+        required: true
+        type: string
+      terraform_version:
+        description: 'Terraform version to use'
+        required: false
+        type: string
+        default: '1.6.0'
+      working_directory:
+        description: 'Working directory for the repository (defaults to root)'
+        required: false
+        type: string
+        default: '.'
+      base_ref:
+        description: 'Base ref for change detection (for push events, use github.event.before)'
+        required: false
+        type: string
+      head_ref:
+        description: 'Head ref for change detection (for push events, use github.sha)'
+        required: false
+        type: string
+      selected_environment:
+        description: 'Selected environment for workflow_dispatch (optional)'
+        required: false
+        type: string
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read   # Required to read the repository contents
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT_FOLDERS: ${{ inputs.environment_folders }}
+    outputs:
+      environments: ${{ steps.filter.outputs.environments }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history to access previous commits
+
+      - name: Detect modified environments
+        id: filter
+        run: |
+          ENVIRONMENTS=""
+          
+          # If selected_environment is provided (workflow_dispatch), use it
+          if [ -n "${{ inputs.selected_environment }}" ]; then
+            ENVIRONMENTS="${{ inputs.selected_environment }}"
+          elif [ "${{ github.event_name }}" == "push" ]; then
+            # For push events, use github.event.before and github.sha
+            BASE_REF="${{ github.event.before }}"
+            HEAD_REF="${{ github.sha }}"
+            
+            # Validate that base ref is not the null commit
+            if [ -n "$BASE_REF" ] && [ "$BASE_REF" != "0000000000000000000000000000000000000000" ]; then
+              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+            else
+              echo "Warning: Base ref is null commit or not available, checking all files in current commit"
+              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+            fi
+            
+            # Check which environment folders have changes
+            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+              fi
+            done
+          else
+            # For other events (workflow_dispatch without selected_environment), try to detect from git history
+            if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+              BASE_REF="HEAD~1"
+              HEAD_REF="HEAD"
+              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+              
+              for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+                if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                  ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+                fi
+              done
+            else
+              # If no previous commit exists, check all files in current commit
+              echo "No previous commit found, checking all files in current commit"
+              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+              
+              for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+                if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                  ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+                fi
+              done
+            fi
+          fi
+          
+          # Remove leading space and convert to JSON array
+          ENVIRONMENTS=$(echo "$ENVIRONMENTS" | xargs)
+          if [ -z "$ENVIRONMENTS" ]; then
+            ENVIRONMENTS="[]"
+          else
+            # Convert space-separated list to JSON array
+            ENVIRONMENTS_ARRAY=""
+            for env in $ENVIRONMENTS; do
+              if [ -z "$ENVIRONMENTS_ARRAY" ]; then
+                ENVIRONMENTS_ARRAY="\"$env\""
+              else
+                ENVIRONMENTS_ARRAY="$ENVIRONMENTS_ARRAY,\"$env\""
+              fi
+            done
+            ENVIRONMENTS="[$ENVIRONMENTS_ARRAY]"
+          fi
+          
+          echo "environments=$ENVIRONMENTS" >> $GITHUB_OUTPUT
+          echo "Detected environments: $ENVIRONMENTS"
+
+  apply:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.environments != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.detect-changes.outputs.environments) }}
+      fail-fast: false
+    name: Apply terraform configuration for ${{ matrix.environment }}
+    env:
+      TF_DIR: ${{ matrix.environment }}
+      ARM_USE_OIDC: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform init
+
+      - name: Terraform Apply
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform apply -auto-approve -no-color

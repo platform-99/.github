@@ -1,0 +1,269 @@
+name: Terraform Plan (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      environment_folders:
+        description: 'Space-separated list of environment folder names (e.g., "1-dev 2-test 3-prod")'
+        required: true
+        type: string
+      terraform_version:
+        description: 'Terraform version to use'
+        required: false
+        type: string
+        default: '1.6.0'
+      working_directory:
+        description: 'Working directory for the repository (defaults to root)'
+        required: false
+        type: string
+        default: '.'
+      skip_validation:
+        description: 'Skip single environment validation (allow multiple environments)'
+        required: false
+        type: boolean
+        default: false
+      auto_format:
+        description: 'Automatically format Terraform files and commit fixes'
+        required: false
+        type: boolean
+        default: true
+      comment_on_pr:
+        description: 'Comment Terraform plan output on pull requests'
+        required: false
+        type: boolean
+        default: true
+      selected_environment:
+        description: 'Selected environment for workflow_dispatch (optional)'
+        required: false
+        type: string
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+      GITHUB_TOKEN:
+        required: true
+
+permissions:
+  id-token: write       # Required for OIDC
+  contents: write       # Required to commit formatting fixes
+  pull-requests: write  # Required to comment on PRs
+
+jobs:
+  detect-changes:
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT_FOLDERS: ${{ inputs.environment_folders }}
+    outputs:
+      environments: ${{ steps.filter.outputs.environments }}
+      skip_validation: ${{ steps.check-skip-validation.outputs.skip }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref || github.ref }}
+          fetch-depth: 0  # Fetch full history to access previous commits
+
+      - name: Check if validation should be skipped
+        id: check-skip-validation
+        run: |
+          SKIP_VALIDATION="false"
+          
+          # Check input parameter (handle both boolean and string)
+          if [ "${{ inputs.skip_validation }}" == "true" ] || [ "${{ inputs.skip_validation }}" == true ]; then
+            SKIP_VALIDATION="true"
+            echo "Validation skipped via input parameter"
+          fi
+          
+          # For pull_request, check for label (only if not already skipped)
+          if [ "$SKIP_VALIDATION" != "true" ] && [ "${{ github.event_name }}" == "pull_request" ]; then
+            # Check if PR has the skip validation label
+            LABELS=$(gh pr view ${{ github.event.pull_request.number }} --json labels --jq '.labels[].name' 2>/dev/null || echo "")
+            if echo "$LABELS" | grep -qE "(allow-multi-env|skip-env-validation)"; then
+              SKIP_VALIDATION="true"
+              echo "Validation skipped via PR label"
+            fi
+          fi
+          
+          echo "skip=$SKIP_VALIDATION" >> $GITHUB_OUTPUT
+          echo "Skip validation: $SKIP_VALIDATION"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Detect modified environments
+        id: filter
+        run: |
+          ENVIRONMENTS=""
+          
+          # If selected_environment is provided (workflow_dispatch), use it
+          if [ -n "${{ inputs.selected_environment }}" ]; then
+            ENVIRONMENTS="${{ inputs.selected_environment }}"
+          elif [ -n "${{ inputs.base_ref }}" ] && [ -n "${{ inputs.head_ref }}" ]; then
+            # For pull_request or explicit refs, detect which environments have changes
+            BASE_REF="${{ inputs.base_ref }}"
+            HEAD_REF="${{ inputs.head_ref }}"
+            
+            # Get list of changed files
+            CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+            
+            # Check which environment folders have changes
+            # Loop through all environment folders defined in ENVIRONMENT_FOLDERS
+            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+              fi
+            done
+          else
+            # If no refs provided, check all files in current commit
+            echo "Warning: No base/head refs provided, checking all files in current commit"
+            CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+            
+            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+              fi
+            done
+          fi
+          
+          # Remove leading space and convert to JSON array
+          ENVIRONMENTS=$(echo "$ENVIRONMENTS" | xargs)
+          if [ -z "$ENVIRONMENTS" ]; then
+            ENVIRONMENTS="[]"
+          else
+            # Convert space-separated list to JSON array
+            ENVIRONMENTS_ARRAY=""
+            for env in $ENVIRONMENTS; do
+              if [ -z "$ENVIRONMENTS_ARRAY" ]; then
+                ENVIRONMENTS_ARRAY="\"$env\""
+              else
+                ENVIRONMENTS_ARRAY="$ENVIRONMENTS_ARRAY,\"$env\""
+              fi
+            done
+            ENVIRONMENTS="[$ENVIRONMENTS_ARRAY]"
+          fi
+          
+          echo "environments=$ENVIRONMENTS" >> $GITHUB_OUTPUT
+          echo "Detected environments: $ENVIRONMENTS"
+
+      - name: Validate single environment (PR only)
+        if: github.event_name == 'pull_request' && steps.check-skip-validation.outputs.skip != 'true'
+        run: |
+          ENVIRONMENTS="${{ steps.filter.outputs.environments }}"
+          
+          # Handle empty array case
+          if [ "$ENVIRONMENTS" = "[]" ]; then
+            echo "⚠️  Warning: No environment changes detected"
+            exit 0
+          fi
+          
+          # Count environment names in the JSON array
+          # Remove brackets and quotes, then count words
+          ENV_LIST=$(echo "$ENVIRONMENTS" | sed 's/\[//g' | sed 's/\]//g' | sed 's/"//g' | sed 's/,/ /g')
+          ENV_COUNT=$(echo "$ENV_LIST" | wc -w)
+          
+          if [ "$ENV_COUNT" -gt 1 ]; then
+            echo "❌ Error: Multiple environments detected in this PR!"
+            echo "This PR modifies: $ENVIRONMENTS"
+            echo ""
+            echo "Please split your changes into separate PRs, one per environment."
+            echo "This ensures better code review, reduces risk, and maintains clear audit trails."
+            echo ""
+            echo "To skip this validation, add the label 'allow-multi-env' or 'skip-env-validation' to the PR."
+            exit 1
+          else
+            echo "✅ Single environment detected ($ENV_LIST) - validation passed"
+          fi
+
+  plan:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.environments != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        environment: ${{ fromJson(needs.detect-changes.outputs.environments) }}
+      fail-fast: false
+    name: Create a plan for ${{ matrix.environment }}
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TF_DIR: ${{ matrix.environment }}
+      ARM_USE_OIDC: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref || github.ref }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Check Terraform Formatting
+        id: fmt
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+
+      - name: Fix Terraform Formatting
+        if: steps.fmt.outcome == 'failure' && inputs.auto_format
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform fmt -recursive
+
+      - name: Commit Formatting Fixes
+        if: steps.fmt.outcome == 'failure' && inputs.auto_format && github.event_name == 'pull_request'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add .
+          git commit -m "fix: auto-format terraform files [skip ci]" || exit 0
+          git push
+
+      - name: Terraform Init
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform init
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform plan -no-color -out=tfplan
+        continue-on-error: true
+
+      - name: Terraform Plan Output
+        id: plan-output
+        if: steps.plan.outcome == 'success'
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        run: |
+          terraform show -no-color tfplan > plan_output.txt || echo "No changes to infrastructure." > plan_output.txt
+
+      - name: Comment PR
+        if: github.event_name == 'pull_request' && steps.plan.outcome == 'success' && inputs.comment_on_pr
+        working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
+        run: |
+          PLAN=$(cat plan_output.txt 2>/dev/null || echo "No changes to infrastructure.")
+          WORKFLOW_RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          
+          gh pr comment ${{ github.event.pull_request.number }} --body "## Terraform Plan for ${{ env.TF_DIR }} 📖
+          
+          <details><summary>Show Plan</summary>
+          
+          \`\`\`
+          $PLAN
+          \`\`\`
+          
+          </details>
+          
+          📝 The plan was generated in the [Github Actions Workflow Run]($WORKFLOW_RUN_URL)"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
