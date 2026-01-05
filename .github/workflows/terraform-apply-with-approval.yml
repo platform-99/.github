@@ -214,7 +214,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tfplan-${{ matrix.environment }}
-          path: ${{ inputs.working_directory }}
+          path: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
           merge-multiple: false
 
       - name: Terraform Init
