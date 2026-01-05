@@ -100,31 +100,68 @@ jobs:
           # If selected_environment is provided (workflow_dispatch), use it
           if [ -n "${{ inputs.selected_environment }}" ]; then
             ENVIRONMENTS="${{ inputs.selected_environment }}"
-          elif [ -n "${{ inputs.base_ref }}" ] && [ -n "${{ inputs.head_ref }}" ]; then
-            # For pull_request or explicit refs, detect which environments have changes
-            BASE_REF="${{ inputs.base_ref }}"
-            HEAD_REF="${{ inputs.head_ref }}"
+          elif [ "${{ github.event_name }}" == "pull_request" ]; then
+            # For pull_request events, use PR base and head
+            BASE_REF="${{ github.event.pull_request.base.sha }}"
+            HEAD_REF="${{ github.event.pull_request.head.sha }}"
             
-            # Get list of changed files
-            CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+            # Validate that both refs are available
+            if [ -z "$BASE_REF" ] || [ -z "$HEAD_REF" ]; then
+              echo "Warning: Base or head SHA not available, checking all files in current commit"
+              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+            else
+              # Get list of changed files
+              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+            fi
             
             # Check which environment folders have changes
-            # Loop through all environment folders defined in ENVIRONMENT_FOLDERS
+            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+              fi
+            done
+          elif [ "${{ github.event_name }}" == "push" ]; then
+            # For push events, use github.event.before and github.sha
+            BASE_REF="${{ github.event.before }}"
+            HEAD_REF="${{ github.sha }}"
+            
+            # Validate that base ref is not the null commit
+            if [ -n "$BASE_REF" ] && [ "$BASE_REF" != "0000000000000000000000000000000000000000" ]; then
+              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+            else
+              echo "Warning: Base ref is null commit or not available, checking all files in current commit"
+              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+            fi
+            
+            # Check which environment folders have changes
             for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
               if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
                 ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
               fi
             done
           else
-            # If no refs provided, check all files in current commit
-            echo "Warning: No base/head refs provided, checking all files in current commit"
-            CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
-            
-            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
-              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
-                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
-              fi
-            done
+            # For other events (workflow_dispatch without selected_environment), try to detect from git history
+            if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+              BASE_REF="HEAD~1"
+              HEAD_REF="HEAD"
+              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+              
+              for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+                if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                  ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+                fi
+              done
+            else
+              # If no previous commit exists, check all files in current commit
+              echo "No previous commit found, checking all files in current commit"
+              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+              
+              for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+                if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                  ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+                fi
+              done
+            fi
           fi
           
           # Remove leading space and convert to JSON array
