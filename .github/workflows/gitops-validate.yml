@@ -85,7 +85,7 @@ jobs:
           HELM_REGISTRY_USERNAME: ${{ secrets.HELM_REGISTRY_USERNAME }}
           HELM_REGISTRY_PASSWORD: ${{ secrets.HELM_REGISTRY_PASSWORD }}
         run: |
-          echo $HELM_REGISTRY_USERNAME"
+          echo $HELM_REGISTRY_USERNAME
           if [ -z "$HELM_REGISTRY_USERNAME" ] || [ -z "$HELM_REGISTRY_PASSWORD" ]; then
             echo "❌ Error: Private chart repository requires HELM_REGISTRY_USERNAME and HELM_REGISTRY_PASSWORD secrets"
             exit 1
