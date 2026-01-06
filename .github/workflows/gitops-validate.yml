@@ -1,0 +1,154 @@
+name: GitOps Configuration Validate (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      chart_repo_url:
+        description: 'Helm chart repository URL (OCI or HTTP)'
+        required: true
+        type: string
+      chart_name:
+        description: 'Helm chart name'
+        required: true
+        type: string
+      chart_version:
+        description: 'Helm chart version'
+        required: true
+        type: string
+      private_chart_repo:
+        description: 'Whether the chart repository is private (requires authentication)'
+        required: false
+        type: boolean
+        default: false
+      environments_path:
+        description: 'Path to environments directory (default: environments)'
+        required: false
+        type: string
+        default: 'environments'
+      helm_version:
+        description: 'Helm version to use'
+        required: false
+        type: string
+        default: '3.12.0'
+
+jobs:
+  validate-yaml:
+    name: Validate YAML Syntax
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+
+      - name: Validate YAML syntax
+        run: |
+          echo "🔍 Validating YAML syntax..."
+          find . -type f \( -name "*.yaml" -o -name "*.yml" \) ! -path "./.git/*" | while read -r file; do
+            echo "Checking: $file"
+            yq eval '.' "$file" > /dev/null || {
+              echo "❌ Error: Invalid YAML in $file"
+              exit 1
+            }
+          done
+          echo "✅ All YAML files are valid"
+
+  validate-helm:
+    name: Validate Helm Templates
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: ${{ inputs.helm_version }}
+
+      - name: Authenticate to OCI registry (if private)
+        if: inputs.private_chart_repo == true
+        env:
+          HELM_REGISTRY_USERNAME: ${{ secrets.HELM_REGISTRY_USERNAME }}
+          HELM_REGISTRY_PASSWORD: ${{ secrets.HELM_REGISTRY_PASSWORD }}
+        run: |
+          if [ -z "$HELM_REGISTRY_USERNAME" ] || [ -z "$HELM_REGISTRY_PASSWORD" ]; then
+            echo "❌ Error: Private chart repository requires HELM_REGISTRY_USERNAME and HELM_REGISTRY_PASSWORD secrets"
+            exit 1
+          fi
+          echo "🔐 Authenticating to OCI registry..."
+          # Extract registry URL from chart repo URL (remove oci:// prefix and chart path)
+          REGISTRY_URL=$(echo "${{ inputs.chart_repo_url }}" | sed 's|^oci://||' | cut -d'/' -f1)
+          helm registry login "oci://$REGISTRY_URL" \
+            --username "$HELM_REGISTRY_USERNAME" \
+            --password "$HELM_REGISTRY_PASSWORD"
+          echo "✅ Authentication successful"
+
+      - name: Validate Helm templates
+        env:
+          HELM_REGISTRY_USERNAME: ${{ secrets.HELM_REGISTRY_USERNAME }}
+          HELM_REGISTRY_PASSWORD: ${{ secrets.HELM_REGISTRY_PASSWORD }}
+        run: |
+          echo "🔍 Validating Helm templates..."
+          
+          # Ensure chart repo URL has oci:// prefix for OCI registries
+          CHART_URL="${{ inputs.chart_repo_url }}"
+          if [[ ! "$CHART_URL" =~ ^oci:// ]]; then
+            CHART_URL="oci://$CHART_URL"
+          fi
+          
+          echo "Chart: ${CHART_URL}/${{ inputs.chart_name }}:${{ inputs.chart_version }}"
+          
+          ENV_PATH="${{ inputs.environments_path }}"
+          
+          # Validate each environment's values
+          for env_dir in ${ENV_PATH}/*/; do
+            if [ -d "$env_dir" ] && [ -f "$env_dir/values.yaml" ]; then
+              ENV_NAME=$(basename "$env_dir")
+              echo "Validating with $env_dir/values.yaml..."
+              
+              # Build helm command with all applicable values files
+              HELM_CMD="helm template test-release \"${CHART_URL}/${{ inputs.chart_name }}\" --version \"${{ inputs.chart_version }}\""
+              
+              if [ -f "${ENV_PATH}/common/values.yaml" ]; then
+                HELM_CMD="$HELM_CMD -f ${ENV_PATH}/common/values.yaml"
+              fi
+              
+              HELM_CMD="$HELM_CMD -f $env_dir/values.yaml --dry-run"
+              
+              if ! eval "$HELM_CMD" > /dev/null 2>&1; then
+                echo "❌ Error: Helm template validation failed for $ENV_NAME"
+                echo "Running with verbose output:"
+                eval "$HELM_CMD"
+                exit 1
+              fi
+              echo "✅ $ENV_NAME values validation passed"
+            fi
+          done
+          
+          echo "✅ All Helm template validations passed"
+
+  summary:
+    name: Validation Summary
+    runs-on: ubuntu-latest
+    needs: [validate-yaml, validate-helm]
+    if: always()
+    permissions:
+      contents: read
+    steps:
+      - name: Create summary
+        run: |
+          echo "### ✅ Configuration Validation Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| YAML Syntax | ${{ needs.validate-yaml.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Helm Templates | ${{ needs.validate-helm.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Chart**: \`${{ inputs.chart_repo_url }}/${{ inputs.chart_name }}:${{ inputs.chart_version }}\`" >> $GITHUB_STEP_SUMMARY
