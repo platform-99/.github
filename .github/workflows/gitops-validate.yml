@@ -108,7 +108,8 @@ jobs:
           ENV_PATH="${{ inputs.environments_path }}"
           
           # Validate each environment's values
-          for env_dir in ${ENV_PATH}/*/; do
+          for env_dir in ${ENV_PATH}/*; do
+            # Only process directories
             if [ -d "$env_dir" ] && [ -f "$env_dir/values.yaml" ]; then
               ENV_NAME=$(basename "$env_dir")
               echo "Validating with $env_dir/values.yaml..."
