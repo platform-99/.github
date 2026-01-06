@@ -81,21 +81,28 @@ jobs:
 
       - name: Authenticate to OCI registry (if private)
         if: inputs.private_chart_repo == true
-        env:
-          HELM_REGISTRY_USERNAME: ${{ secrets.HELM_REGISTRY_USERNAME }}
-          HELM_REGISTRY_PASSWORD: ${{ secrets.HELM_REGISTRY_PASSWORD }}
         run: |
-          echo $HELM_REGISTRY_USERNAME
-          if [ -z "$HELM_REGISTRY_USERNAME" ] || [ -z "$HELM_REGISTRY_PASSWORD" ]; then
+          # Check if secrets are provided by checking if they're non-empty
+          USERNAME="${{ secrets.HELM_REGISTRY_USERNAME }}"
+          PASSWORD="${{ secrets.HELM_REGISTRY_PASSWORD }}"
+          
+          echo "🔍 Debug: Checking secrets..."
+          echo "USERNAME length: ${#USERNAME}"
+          echo "PASSWORD length: ${#PASSWORD}"
+          
+          if [ -z "${USERNAME}" ] || [ -z "${PASSWORD}" ]; then
             echo "❌ Error: Private chart repository requires HELM_REGISTRY_USERNAME and HELM_REGISTRY_PASSWORD secrets"
+            echo "HELM_REGISTRY_USERNAME provided: $([ -n "${USERNAME}" ] && echo 'yes' || echo 'no')"
+            echo "HELM_REGISTRY_PASSWORD provided: $([ -n "${PASSWORD}" ] && echo 'yes' || echo 'no')"
             exit 1
           fi
+          
           echo "🔐 Authenticating to OCI registry..."
           # Extract registry URL from chart repo URL (remove oci:// prefix and chart path)
           REGISTRY_URL=$(echo "${{ inputs.chart_repo_url }}" | sed 's|^oci://||' | cut -d'/' -f1)
-          helm registry login "oci://$REGISTRY_URL" \
-            --username "$HELM_REGISTRY_USERNAME" \
-            --password "$HELM_REGISTRY_PASSWORD"
+          echo "${PASSWORD}" | helm registry login "oci://${REGISTRY_URL}" \
+            --username "${USERNAME}" \
+            --password-stdin
           echo "✅ Authentication successful"
 
       - name: Validate Helm templates
