@@ -95,9 +95,21 @@ jobs:
           
           echo "🔐 Authenticating to OCI registry..."
           # Extract registry URL from chart repo URL (remove oci:// prefix and chart path)
-          REGISTRY_URL=$(echo "${{ inputs.chart_repo_url }}" | sed 's|^oci://||' | cut -d'/' -f1)
-          echo "${PASSWORD}" | helm registry login "oci://${REGISTRY_URL}" \
-            --username "${USERNAME}" \
+          CHART_REPO_URL="${{ inputs.chart_repo_url }}"
+          echo "Debug: Full chart repo URL: ${CHART_REPO_URL}"
+          
+          # Use sed to remove oci:// prefix and extract first part (registry hostname)
+          REGISTRY_URL=$(echo "${CHART_REPO_URL}" | sed 's|^oci://||' | cut -d'/' -f1)
+          echo "Debug: Extracted registry URL: ${REGISTRY_URL}"
+          
+          if [ -z "${REGISTRY_URL}" ] || [ "${REGISTRY_URL}" = "oci" ]; then
+            echo "❌ Error: Failed to extract registry URL from: ${CHART_REPO_URL}"
+            echo "Expected format: oci://registry.example.com/path or oci://registry.example.com"
+            exit 1
+          fi
+          
+          echo "${HELM_REGISTRY_PASSWORD}" | helm registry login "oci://${REGISTRY_URL}" \
+            --username "${HELM_REGISTRY_USERNAME}" \
             --password-stdin
           echo "✅ Authentication successful"
 
