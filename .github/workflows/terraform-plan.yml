@@ -348,9 +348,6 @@ jobs:
             echo "Please verify the Key Vault name is correct and the service principal has access."
             exit 1
           fi
-
-          az keyvault show --name "$KV_NAME"
-          az keyvault secret list --vault-name "$KV_NAME" --query "[].name"
           
           # 2. Get a list of all secret names from the vault
           echo "🔍 Searching for TF-VAR secrets in Key Vault: $KV_NAME"
