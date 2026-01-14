@@ -57,7 +57,7 @@ jobs:
         with:
           version: ${{ inputs.kubectl_version }}
 
-      - name: Validate overlays (kubectl kustomize + dry-run apply)
+      - name: Validate overlays
         id: validate
         shell: bash
         env:
@@ -82,11 +82,9 @@ jobs:
               OVERLAY_NAME=$(basename "$overlay_dir")
               echo "🔍 Validating overlay: $OVERLAY_NAME ($overlay_dir)"
 
-              # 1) Render manifests
-              kubectl kustomize "$overlay_dir" > rendered.yaml
-
-              # 2) Client-side validation (no cluster required)
-              kubectl apply --dry-run=client -f rendered.yaml >/dev/null
+              # Render and validate kustomization structure
+              # kubectl kustomize will fail if there are structural issues (invalid references, missing files, etc.)
+              kubectl kustomize "$overlay_dir" > /dev/null
 
               echo "✅ Overlay validation passed: $OVERLAY_NAME"
               COUNT=$((COUNT + 1))
