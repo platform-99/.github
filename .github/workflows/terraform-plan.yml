@@ -300,7 +300,25 @@ jobs:
       - name: Configure Git for Private Modules
         if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
         run: |
-          git config --global url."https://x-access-token:${{ steps.generate_token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+          TOKEN="${{ steps.generate_token.outputs.token }}"
+          
+          # Configure Git URL rewriting for HTTPS
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+          
+          # Also configure for SSH-style URLs that Terraform might use
+          git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
+          
+          # Set up credential helper to use the token
+          echo "https://x-access-token:${TOKEN}@github.com" > ~/.git-credentials
+          git config --global credential.helper store
+          
+          # Verify the configuration
+          echo "✅ Git configured for private modules"
+          echo "Testing Git authentication..."
+          git ls-remote https://github.com/${{ github.repository }}.git HEAD > /dev/null 2>&1 && echo "✅ Git authentication verified" || echo "⚠️  Warning: Git authentication test failed"
+          
+          # Export token for Terraform to use (some Terraform versions use GIT_ASKPASS)
+          echo "GITHUB_TOKEN=${TOKEN}" >> $GITHUB_ENV
 
       - name: Commit Formatting Fixes
         if: steps.fmt.outcome == 'failure' && inputs.auto_format && github.event_name == 'pull_request'
@@ -334,6 +352,8 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          GIT_ASKPASS: ${{ inputs.configure_git_for_private_modules && format('echo {0}', steps.generate_token.outputs.token) || '' }}
+          GIT_TERMINAL_PROMPT: ${{ inputs.configure_git_for_private_modules && '0' || '' }}
         run: terraform init
 
       - name: 'Determine Key Vault Name'
