@@ -291,7 +291,6 @@ jobs:
       - name: Generate Github App Token
         id: generate_token
         if: inputs.configure_git_for_private_modules
-        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.GH_APP_ID }}
