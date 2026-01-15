@@ -36,6 +36,21 @@ on:
         description: 'Selected environment for workflow_dispatch (optional)'
         required: false
         type: string
+      configure_git_for_private_modules:
+        description: 'Configure Git authentication for private Terraform modules (requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY secrets)'
+        required: false
+        type: boolean
+        default: false
+      configure_aws_credentials:
+        description: 'Configure AWS credentials using OIDC (requires AWS_ROLE_ARN secret)'
+        required: false
+        type: boolean
+        default: false
+      aws_region:
+        description: 'AWS region for credential configuration (default: ca-central-1)'
+        required: false
+        type: string
+        default: 'ca-central-1'
       kv_names:
         description: 'Space-separated list of Azure Key Vault names corresponding to environment_folders (e.g., "kv-dev-wb1a2b3c4 kv-test-wb4d5e6f7g8 kv-prod-wb7h8i9j0k1"). Order must match environment_folders. If not provided, Key Vault secret injection will be skipped. Secrets in Key Vault should be named with TF-VAR- prefix (e.g., TF-VAR-db-password).'
         required: false
@@ -47,6 +62,15 @@ on:
         required: true
       AZURE_SUBSCRIPTION_ID:
         required: true
+      GITHUB_APP_ID:
+        description: 'GitHub App ID for authenticating to private Terraform modules (required if configure_git_for_private_modules is true)'
+        required: false
+      GITHUB_APP_PRIVATE_KEY:
+        description: 'GitHub App private key for authenticating to private Terraform modules (required if configure_git_for_private_modules is true)'
+        required: false
+      AWS_ROLE_ARN:
+        description: 'AWS IAM role ARN to assume for OIDC authentication (required if configure_aws_credentials is true)'
+        required: false
 
 permissions:
   id-token: write       # Required for OIDC
@@ -251,6 +275,34 @@ jobs:
         working-directory: ${{ inputs.working_directory }}
         run: terraform fmt -recursive
 
+      - name: Validate GitHub App secrets
+        if: inputs.configure_git_for_private_modules
+        run: |
+          if [ -z "${{ secrets.GITHUB_APP_ID }}" ]; then
+            echo "❌ Error: 'GITHUB_APP_ID' secret is required when 'configure_git_for_private_modules' is true"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GITHUB_APP_PRIVATE_KEY }}" ]; then
+            echo "❌ Error: 'GITHUB_APP_PRIVATE_KEY' secret is required when 'configure_git_for_private_modules' is true"
+            exit 1
+          fi
+          echo "✅ GitHub App secrets validated"
+
+      - name: Generate Github App Token
+        id: generate_token
+        if: inputs.configure_git_for_private_modules
+        continue-on-error: true
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GITHUB_APP_ID }}
+          private-key: ${{ secrets.GITHUB_APP_PRIVATE_KEY }}
+
+      # Configure Git ONLY if a token was generated
+      - name: Configure Git for Private Modules
+        if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
+        run: |
+          git config --global url."https://x-access-token:${{ steps.generate_token.outputs.token }}@github.com/".insteadOf "https://github.com/"
+
       - name: Commit Formatting Fixes
         if: steps.fmt.outcome == 'failure' && inputs.auto_format && github.event_name == 'pull_request'
         working-directory: ${{ inputs.working_directory }}
@@ -260,6 +312,22 @@ jobs:
           git add .
           git commit -m "fix: auto-format terraform files [skip ci]" || exit 0
           git push
+
+      - name: Validate AWS credentials secret
+        if: inputs.configure_aws_credentials
+        run: |
+          if [ -z "${{ secrets.AWS_ROLE_ARN }}" ]; then
+            echo "❌ Error: 'AWS_ROLE_ARN' secret is required when 'configure_aws_credentials' is true"
+            exit 1
+          fi
+          echo "✅ AWS credentials secret validated"
+
+      - name: Configure AWS credentials
+        if: inputs.configure_aws_credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
 
       - name: Terraform Init
         working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
