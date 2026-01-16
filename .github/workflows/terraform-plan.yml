@@ -340,9 +340,9 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          GITHUB_TOKEN: ${{ inputs.configure_git_for_private_modules && steps.generate_token.outputs.token || '' }}
-          GIT_ASKPASS: ${{ inputs.configure_git_for_private_modules && '/tmp/git-askpass.sh' || '' }}
-          GIT_TERMINAL_PROMPT: ${{ inputs.configure_git_for_private_modules && '0' || '' }}
+          # GITHUB_TOKEN: ${{ inputs.configure_git_for_private_modules && steps.generate_token.outputs.token || '' }}
+          # GIT_ASKPASS: ${{ inputs.configure_git_for_private_modules && '/tmp/git-askpass.sh' || '' }}
+          # GIT_TERMINAL_PROMPT: ${{ inputs.configure_git_for_private_modules && '0' || '' }}
         run: |
           # if [ "${{ inputs.configure_git_for_private_modules }}" == "true" ]; then
           #   echo "🔍 Debug: Git configuration for Terraform Init"
