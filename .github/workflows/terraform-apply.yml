@@ -213,22 +213,6 @@ jobs:
           # Configure Git URL rewriting for SSH
           git config --global url."https://${TOKEN}:x-access-token@github.com/${MODULE_ORG}".insteadOf ssh://git@github.com/${MODULE_ORG}
 
-      - name: Validate AWS credentials secret
-        if: inputs.configure_aws_credentials
-        run: |
-          if [ -z "${{ secrets.AWS_ROLE_ARN }}" ]; then
-            echo "❌ Error: 'AWS_ROLE_ARN' secret is required when 'configure_aws_credentials' is true"
-            exit 1
-          fi
-          echo "✅ AWS credentials secret validated"
-
-      - name: Configure AWS credentials
-        if: inputs.configure_aws_credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ inputs.aws_region }}
-
       - name: 'Determine Key Vault Name'
         if: inputs.kv_names != null && inputs.kv_names != ''
         id: determine-kv-name
@@ -359,6 +343,22 @@ jobs:
           else
             echo "✅ Successfully injected $FOUND_COUNT Terraform variable(s) from Key Vault"
           fi
+
+      - name: Validate AWS credentials secret
+        if: inputs.configure_aws_credentials
+        run: |
+          if [ -z "${{ secrets.AWS_ROLE_ARN }}" ]; then
+            echo "❌ Error: 'AWS_ROLE_ARN' secret is required when 'configure_aws_credentials' is true"
+            exit 1
+          fi
+          echo "✅ AWS credentials secret validated"
+  
+      - name: Configure AWS credentials
+        if: inputs.configure_aws_credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
 
       - name: Terraform Init
         working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}

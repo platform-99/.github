@@ -268,17 +268,6 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform_version }}
 
-      - name: Check Terraform Formatting
-        id: fmt
-        working-directory: ${{ inputs.working_directory }}
-        run: terraform fmt -check -recursive
-        continue-on-error: true
-
-      - name: Fix Terraform Formatting
-        if: steps.fmt.outcome == 'failure' && inputs.auto_format
-        working-directory: ${{ inputs.working_directory }}
-        run: terraform fmt -recursive
-
       - name: Validate GitHub App secrets
         if: inputs.configure_git_for_private_modules
         run: |
@@ -312,6 +301,17 @@ jobs:
           
           # Configure Git URL rewriting for SSH
           git config --global url."https://${TOKEN}:x-access-token@github.com/${MODULE_ORG}".insteadOf ssh://git@github.com/${MODULE_ORG}
+
+      - name: Check Terraform Formatting
+        id: fmt
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+  
+      - name: Fix Terraform Formatting
+        if: steps.fmt.outcome == 'failure' && inputs.auto_format
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform fmt -recursive
 
       - name: Commit Formatting Fixes
         if: steps.fmt.outcome == 'failure' && inputs.auto_format && github.event_name == 'pull_request'
