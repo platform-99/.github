@@ -344,13 +344,13 @@ jobs:
           GIT_ASKPASS: ${{ inputs.configure_git_for_private_modules && '/tmp/git-askpass.sh' || '' }}
           GIT_TERMINAL_PROMPT: ${{ inputs.configure_git_for_private_modules && '0' || '' }}
         run: |
-          if [ "${{ inputs.configure_git_for_private_modules }}" == "true" ]; then
-            echo "🔍 Debug: Git configuration for Terraform Init"
-            echo "GIT_ASKPASS: ${GIT_ASKPASS:-not set}"
-            echo "GITHUB_TOKEN: ${GITHUB_TOKEN:+set (${#GITHUB_TOKEN} chars)}"
-            git config --global --get-regexp url || true
-            git config --global --get-regexp credential || true
-          fi
+          # if [ "${{ inputs.configure_git_for_private_modules }}" == "true" ]; then
+          #   echo "🔍 Debug: Git configuration for Terraform Init"
+          #   echo "GIT_ASKPASS: ${GIT_ASKPASS:-not set}"
+          #   echo "GITHUB_TOKEN: ${GITHUB_TOKEN:+set (${#GITHUB_TOKEN} chars)}"
+          #   git config --global --get-regexp url || true
+          #   git config --global --get-regexp credential || true
+          # fi
           terraform init
 
       - name: 'Determine Key Vault Name'
