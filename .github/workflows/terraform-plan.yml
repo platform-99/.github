@@ -302,46 +302,11 @@ jobs:
         run: |
           TOKEN="${{ steps.generate_token.outputs.token }}"
           
-          # Create GIT_ASKPASS script
-          cat > /tmp/git-askpass.sh << 'EOF'
-          #!/bin/sh
-          echo "$GITHUB_TOKEN"
-          EOF
-          chmod +x /tmp/git-askpass.sh
-          
           # Configure Git URL rewriting for HTTPS
           git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
           
           # Also configure for SSH-style URLs that Terraform might use
           git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
-          
-          # Set up credential helper to use the token
-          mkdir -p ~/.git
-          echo "https://x-access-token:${TOKEN}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
-          git config --global credential.helper store
-          
-          # Set username for GitHub
-          git config --global credential.https://github.com.username x-access-token
-          
-          # Export token as environment variable for GIT_ASKPASS and Terraform
-          echo "GITHUB_TOKEN=${TOKEN}" >> $GITHUB_ENV
-          echo "GIT_ASKPASS=/tmp/git-askpass.sh" >> $GITHUB_ENV
-          echo "GIT_TERMINAL_PROMPT=0" >> $GITHUB_ENV
-          
-          # Verify the configuration
-          echo "✅ Git configured for private modules"
-          echo "Git config:"
-          git config --global --get-regexp url
-          git config --global --get-regexp credential
-          echo ""
-          echo "Testing Git authentication..."
-          if git ls-remote https://github.com/${{ github.repository }}.git HEAD > /dev/null 2>&1; then
-            echo "✅ Git authentication verified"
-          else
-            echo "⚠️  Warning: Git authentication test failed"
-            echo "Token length: ${#TOKEN} characters"
-          fi
 
       - name: Commit Formatting Fixes
         if: steps.fmt.outcome == 'failure' && inputs.auto_format && github.event_name == 'pull_request'
