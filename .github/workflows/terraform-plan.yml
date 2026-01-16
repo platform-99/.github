@@ -11,7 +11,7 @@ on:
         description: 'Terraform version to use'
         required: false
         type: string
-        default: '1.6.0'
+        default: '1.14.3'
       working_directory:
         description: 'Working directory for the repository (defaults to root)'
         required: false
@@ -295,15 +295,36 @@ jobs:
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: platform-99-aws
+          owner: ${{ github.repository_owner }} #platform-99-aws
 
-      - id: private-modules
-        uses: philips-labs/terraform-private-modules-action@v1
-        with:
-          org: platform-99-aws
-          token: ${{ steps.generate_token.outputs.token }}
+      # - id: private-modules
+      #   uses: philips-labs/terraform-private-modules-action@v1
+      #   with:
+      #     org: platform-99-aws
+      #     token: ${{ steps.generate_token.outputs.token }}
 
-      # # Configure Git ONLY if a token was generated
+
+      # Configure Git only if a token was generated
+      - name: Configure Git for Private Modules
+        if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
+        run: |
+          TOKEN="${{ steps.generate_token.outputs.token }}"
+          
+          # Configure Git URL rewriting for HTTPS
+          git config --global url."https://git:${TOKEN}@github.com/${{ github.repository_owner }}".insteadOf "https://github.com/${{ github.repository_owner }}"
+          
+          # Configure Git URL rewriting for SSH
+          git config --global url."https://${TOKEN}:x-access-token@github.com/${{ github.repository_owner }}".insteadOf ssh://git@github.com/${{ github.repository_owner }}
+
+          # # Configure Git URL rewriting for HTTPS (must match exactly what Terraform uses)
+          # git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
+          
+          # # Also configure for SSH-style URLs that Terraform might use
+          # git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
+
+
+
+      # Configure Git ONLY if a token was generated
       # - name: Configure Git for Private Modules
       #   if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
       #   run: |
