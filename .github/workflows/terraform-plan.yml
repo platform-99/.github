@@ -41,6 +41,10 @@ on:
         required: false
         type: boolean
         default: false
+      private_module_owner:
+        description: 'GitHub organization name where private Terraform modules are located (defaults to repository owner). The GitHub App must be installed on this organization.'
+        required: false
+        type: string
       configure_aws_credentials:
         description: 'Configure AWS credentials using OIDC (requires AWS_ROLE_ARN secret)'
         required: false
@@ -295,18 +299,19 @@ jobs:
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+          owner: ${{ inputs.private_module_owner || github.repository_owner }}
 
       - name: Configure Git for Private Modules
         if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
         run: |
           TOKEN="${{ steps.generate_token.outputs.token }}"
+          MODULE_ORG="${{ inputs.private_module_owner || github.repository_owner }}"
           
           # Configure Git URL rewriting for HTTPS
-          git config --global url."https://git:${TOKEN}@github.com/${{ github.repository_owner }}".insteadOf "https://github.com/${{ github.repository_owner }}"
+          git config --global url."https://git:${TOKEN}@github.com/${MODULE_ORG}".insteadOf "https://github.com/${MODULE_ORG}"
           
           # Configure Git URL rewriting for SSH
-          git config --global url."https://${TOKEN}:x-access-token@github.com/${{ github.repository_owner }}".insteadOf ssh://git@github.com/${{ github.repository_owner }}
+          git config --global url."https://${TOKEN}:x-access-token@github.com/${MODULE_ORG}".insteadOf ssh://git@github.com/${MODULE_ORG}
 
       - name: Commit Formatting Fixes
         if: steps.fmt.outcome == 'failure' && inputs.auto_format && github.event_name == 'pull_request'
