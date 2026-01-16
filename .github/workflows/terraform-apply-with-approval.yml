@@ -89,7 +89,7 @@ jobs:
 
       - name: Detect modified environments
         id: filter
-        uses: ./.github/actions/detect-modified-environments
+        uses: michaelpatsula/platform-99/.github/actions/detect-modified-environments@main
         with:
           environment_folders: ${{ inputs.environment_folders }}
           selected_environment: ${{ inputs.selected_environment }}
@@ -119,7 +119,7 @@ jobs:
 
       - name: Configure Git Authentication for Private Modules
         if: inputs.configure_git_for_private_modules
-        uses: ./.github/actions/github-private-modules-auth
+        uses: michaelpatsula/platform-99/.github/actions/github-private-modules-auth@main
         with:
           configure_git_for_private_modules: ${{ inputs.configure_git_for_private_modules }}
           gh_app_id: ${{ secrets.GH_APP_ID }}
@@ -145,7 +145,7 @@ jobs:
 
       - name: Inject Terraform Variables from Azure Key Vault
         if: inputs.kv_names != null && inputs.kv_names != ''
-        uses: ./.github/actions/azure-keyvault-inject-secrets
+        uses: michaelpatsula/platform-99/.github/actions/azure-keyvault-inject-secrets@main
         with:
           environment_folders: ${{ inputs.environment_folders }}
           kv_names: ${{ inputs.kv_names }}
@@ -218,7 +218,7 @@ jobs:
 
       - name: Configure Git Authentication for Private Modules
         if: inputs.configure_git_for_private_modules
-        uses: ./.github/actions/github-private-modules-auth
+        uses: michaelpatsula/platform-99/.github/actions/github-private-modules-auth@main
         with:
           configure_git_for_private_modules: ${{ inputs.configure_git_for_private_modules }}
           gh_app_id: ${{ secrets.GH_APP_ID }}
@@ -244,7 +244,7 @@ jobs:
 
       - name: Inject Terraform Variables from Azure Key Vault
         if: inputs.kv_names != null && inputs.kv_names != ''
-        uses: ./.github/actions/azure-keyvault-inject-secrets
+        uses: michaelpatsula/platform-99/.github/actions/azure-keyvault-inject-secrets@main
         with:
           environment_folders: ${{ inputs.environment_folders }}
           kv_names: ${{ inputs.kv_names }}
