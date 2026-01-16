@@ -295,16 +295,8 @@ jobs:
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }} #platform-99-aws
+          owner: ${{ github.repository_owner }}
 
-      # - id: private-modules
-      #   uses: philips-labs/terraform-private-modules-action@v1
-      #   with:
-      #     org: platform-99-aws
-      #     token: ${{ steps.generate_token.outputs.token }}
-
-
-      # Configure Git only if a token was generated
       - name: Configure Git for Private Modules
         if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
         run: |
@@ -315,98 +307,6 @@ jobs:
           
           # Configure Git URL rewriting for SSH
           git config --global url."https://${TOKEN}:x-access-token@github.com/${{ github.repository_owner }}".insteadOf ssh://git@github.com/${{ github.repository_owner }}
-
-          # # Configure Git URL rewriting for HTTPS (must match exactly what Terraform uses)
-          # git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-          
-          # # Also configure for SSH-style URLs that Terraform might use
-          # git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
-
-
-
-      # Configure Git ONLY if a token was generated
-      # - name: Configure Git for Private Modules
-      #   if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
-      #   run: |
-      #     TOKEN="${{ steps.generate_token.outputs.token }}"
-          
-      #     # Set up credential helper to prevent prompts
-      #     mkdir -p ~/.git
-      #     echo "https://x-access-token:${TOKEN}@github.com" > ~/.git-credentials
-      #     chmod 600 ~/.git-credentials
-      #     git config --global credential.helper store
-          
-      #     # Configure Git URL rewriting for HTTPS (must match exactly what Terraform uses)
-      #     git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
-          
-      #     # Also configure for SSH-style URLs that Terraform might use
-      #     git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
-          
-      #     # Prevent Git from prompting for credentials
-      #     git config --global credential.https://github.com.username x-access-token
-      #     git config --global core.askPass ""
-          
-      #     # Export environment variables for Terraform
-      #     echo "GIT_TERMINAL_PROMPT=0" >> $GITHUB_ENV
-      #     echo "GIT_ASKPASS=echo" >> $GITHUB_ENV
-          
-      #     # Verify the configuration
-      #     echo "✅ Git configured for private modules"
-      #     echo ""
-      #     echo "Token information:"
-      #     echo "  Token length: ${#TOKEN} characters"
-      #     echo "  Token preview: ${TOKEN:0:20}..."
-      #     echo ""
-          
-      #     # Test token by calling GitHub API (installation tokens work with user/repo endpoints)
-      #     echo "Testing token with GitHub API..."
-      #     # Test with the repository we need to access
-      #     API_RESPONSE=$(curl -s -w "\n%{http_code}" -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/repos/platform-99-aws/terraform-aurora-aws-environment" 2>&1)
-      #     HTTP_CODE=$(echo "$API_RESPONSE" | tail -1)
-      #     API_BODY=$(echo "$API_RESPONSE" | head -n -1)
-          
-      #     if [ "$HTTP_CODE" = "200" ]; then
-      #       echo "✅ Token is valid - can access repository via API"
-      #       REPO_NAME=$(echo "$API_BODY" | grep -o '"full_name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
-      #       echo "  Repository: $REPO_NAME"
-      #     elif [ "$HTTP_CODE" = "404" ]; then
-      #       echo "⚠️  Warning: Repository not found or token doesn't have access"
-      #       echo "  This usually means the GitHub App is not installed on this repository"
-      #       echo "  or the repository access hasn't been granted"
-      #     elif [ "$HTTP_CODE" = "401" ]; then
-      #       echo "⚠️  Warning: Token authentication failed"
-      #       echo "  Response: $API_BODY"
-      #     else
-      #       echo "⚠️  Warning: Unexpected response (HTTP $HTTP_CODE)"
-      #       echo "  Response: $API_BODY"
-      #     fi
-      #     echo ""
-          
-      #     # Test repository access
-      #     echo "Testing Git authentication..."
-      #     echo "Repository: platform-99-aws/terraform-aurora-aws-environment"
-          
-      #     # Test with verbose output to see the actual error
-      #     TEST_OUTPUT=$(git ls-remote "https://github.com/platform-99-aws/terraform-aurora-aws-environment.git" HEAD 2>&1)
-      #     TEST_EXIT_CODE=$?
-          
-      #     if [ $TEST_EXIT_CODE -eq 0 ]; then
-      #       echo "✅ Git authentication verified - can access the repository"
-      #     else
-      #       echo "❌ Git authentication test failed"
-      #       echo "Error output:"
-      #       echo "$TEST_OUTPUT"
-      #       echo ""
-      #       echo "Troubleshooting steps:"
-      #       echo "1. Go to: https://github.com/organizations/platform-99-aws/settings/installations"
-      #       echo "2. Find your GitHub App and click 'Configure'"
-      #       echo "3. Under 'Repository access', ensure 'terraform-aurora-aws-environment' is selected"
-      #       echo "   OR select 'All repositories' if you want org-wide access"
-      #       echo "4. Verify 'Repository permissions' includes 'Contents: Read'"
-      #       echo "5. If you just granted access, you may need to regenerate the token"
-      #       echo ""
-      #       echo "Note: The workflow will continue, but Terraform may fail to download modules."
-      #     fi
 
       - name: Commit Formatting Fixes
         if: steps.fmt.outcome == 'failure' && inputs.auto_format && github.event_name == 'pull_request'
