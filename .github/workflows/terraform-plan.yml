@@ -345,6 +345,7 @@ jobs:
         run: terraform init
 
       - name: 'Determine Key Vault Name'
+        if: inputs.kv_names != null && inputs.kv_names != ''
         id: determine-kv-name
         shell: bash
         env:
