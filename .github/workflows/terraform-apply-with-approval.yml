@@ -55,10 +55,13 @@ on:
         type: string
     secrets:
       AZURE_CLIENT_ID:
+        description: 'Azure Client ID for authenticating to Azure'
         required: true
       AZURE_TENANT_ID:
+        description: 'Azure Tenant ID for authenticating to Azure'
         required: true
       AZURE_SUBSCRIPTION_ID:
+        description: 'Azure Subscription ID for authenticating to Azure'
         required: true
       GH_APP_ID:
         description: 'GitHub App ID for authenticating to private Terraform modules (required if configure_git_for_private_modules is true)'
@@ -89,7 +92,7 @@ jobs:
 
       - name: Detect modified environments
         id: filter
-        uses: michaelpatsula/platform-99/.github/actions/detect-modified-environments@main
+        uses: platform-99/.github/.github/actions/detect-modified-environments@main
         with:
           environment_folders: ${{ inputs.environment_folders }}
           selected_environment: ${{ inputs.selected_environment }}
@@ -119,7 +122,7 @@ jobs:
 
       - name: Configure Git Authentication for Private Modules
         if: inputs.configure_git_for_private_modules
-        uses: michaelpatsula/platform-99/.github/actions/github-private-modules-auth@main
+        uses: platform-99/.github/.github/actions/github-private-modules-auth@main
         with:
           configure_git_for_private_modules: ${{ inputs.configure_git_for_private_modules }}
           gh_app_id: ${{ secrets.GH_APP_ID }}
@@ -145,7 +148,7 @@ jobs:
 
       - name: Inject Terraform Variables from Azure Key Vault
         if: inputs.kv_names != null && inputs.kv_names != ''
-        uses: michaelpatsula/platform-99/.github/actions/azure-keyvault-inject-secrets@main
+        uses: platform-99/.github/.github/actions/azure-keyvault-inject-secrets@main
         with:
           environment_folders: ${{ inputs.environment_folders }}
           kv_names: ${{ inputs.kv_names }}
@@ -218,7 +221,7 @@ jobs:
 
       - name: Configure Git Authentication for Private Modules
         if: inputs.configure_git_for_private_modules
-        uses: michaelpatsula/platform-99/.github/actions/github-private-modules-auth@main
+        uses: platform-99/.github/.github/actions/github-private-modules-auth@main
         with:
           configure_git_for_private_modules: ${{ inputs.configure_git_for_private_modules }}
           gh_app_id: ${{ secrets.GH_APP_ID }}
@@ -244,7 +247,7 @@ jobs:
 
       - name: Inject Terraform Variables from Azure Key Vault
         if: inputs.kv_names != null && inputs.kv_names != ''
-        uses: michaelpatsula/platform-99/.github/actions/azure-keyvault-inject-secrets@main
+        uses: platform-99/.github/.github/actions/azure-keyvault-inject-secrets@main
         with:
           environment_folders: ${{ inputs.environment_folders }}
           kv_names: ${{ inputs.kv_names }}
