@@ -295,6 +295,7 @@ jobs:
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
 
       # Configure Git ONLY if a token was generated
       - name: Configure Git for Private Modules
@@ -324,12 +325,49 @@ jobs:
           
           # Verify the configuration
           echo "✅ Git configured for private modules"
-          echo "Testing Git authentication with a private repo..."
-          if git ls-remote "https://github.com/platform-99-aws/terraform-aurora-aws-environment.git" HEAD > /dev/null 2>&1; then
-            echo "✅ Git authentication verified"
+          echo ""
+          echo "Token information:"
+          echo "  Token length: ${#TOKEN} characters"
+          echo "  Token preview: ${TOKEN:0:20}..."
+          echo ""
+          
+          # Test token by calling GitHub API
+          echo "Testing token with GitHub API..."
+          API_RESPONSE=$(curl -s -H "Authorization: Bearer ${TOKEN}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/app" 2>&1)
+          if echo "$API_RESPONSE" | grep -q '"id"'; then
+            echo "✅ Token is valid - GitHub App authenticated"
+            APP_NAME=$(echo "$API_RESPONSE" | grep -o '"name":"[^"]*"' | head -1 | cut -d'"' -f4 || echo "unknown")
+            echo "  App name: $APP_NAME"
           else
-            echo "⚠️  Warning: Could not access test repository"
-            echo "This might indicate the GitHub App doesn't have access to the repository"
+            echo "⚠️  Warning: Could not verify token with GitHub API"
+            echo "  Response: $API_RESPONSE"
+          fi
+          echo ""
+          
+          # Test repository access
+          echo "Testing Git authentication..."
+          echo "Repository: platform-99-aws/terraform-aurora-aws-environment"
+          
+          # Test with verbose output to see the actual error
+          TEST_OUTPUT=$(git ls-remote "https://github.com/platform-99-aws/terraform-aurora-aws-environment.git" HEAD 2>&1)
+          TEST_EXIT_CODE=$?
+          
+          if [ $TEST_EXIT_CODE -eq 0 ]; then
+            echo "✅ Git authentication verified - can access the repository"
+          else
+            echo "❌ Git authentication test failed"
+            echo "Error output:"
+            echo "$TEST_OUTPUT"
+            echo ""
+            echo "Troubleshooting steps:"
+            echo "1. Go to: https://github.com/organizations/platform-99-aws/settings/installations"
+            echo "2. Find your GitHub App and click 'Configure'"
+            echo "3. Under 'Repository access', ensure 'terraform-aurora-aws-environment' is selected"
+            echo "   OR select 'All repositories' if you want org-wide access"
+            echo "4. Verify 'Repository permissions' includes 'Contents: Read'"
+            echo "5. If you just granted access, you may need to regenerate the token"
+            echo ""
+            echo "Note: The workflow will continue, but Terraform may fail to download modules."
           fi
 
       - name: Commit Formatting Fixes
