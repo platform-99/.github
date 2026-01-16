@@ -302,11 +302,36 @@ jobs:
         run: |
           TOKEN="${{ steps.generate_token.outputs.token }}"
           
-          # Configure Git URL rewriting for HTTPS
+          # Set up credential helper to prevent prompts
+          mkdir -p ~/.git
+          echo "https://x-access-token:${TOKEN}@github.com" > ~/.git-credentials
+          chmod 600 ~/.git-credentials
+          git config --global credential.helper store
+          
+          # Configure Git URL rewriting for HTTPS (must match exactly what Terraform uses)
           git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "https://github.com/"
           
           # Also configure for SSH-style URLs that Terraform might use
           git config --global url."https://x-access-token:${TOKEN}@github.com/".insteadOf "git@github.com:"
+          
+          # Prevent Git from prompting for credentials
+          git config --global credential.https://github.com.username x-access-token
+          git config --global core.askPass ""
+          git config --global GIT_TERMINAL_PROMPT 0
+          
+          # Export environment variables for Terraform
+          echo "GIT_TERMINAL_PROMPT=0" >> $GITHUB_ENV
+          echo "GIT_ASKPASS=echo" >> $GITHUB_ENV
+          
+          # Verify the configuration
+          echo "✅ Git configured for private modules"
+          echo "Testing Git authentication with a private repo..."
+          if git ls-remote "https://github.com/platform-99-aws/terraform-aurora-aws-environment.git" HEAD > /dev/null 2>&1; then
+            echo "✅ Git authentication verified"
+          else
+            echo "⚠️  Warning: Could not access test repository"
+            echo "This might indicate the GitHub App doesn't have access to the repository"
+          fi
 
       - name: Commit Formatting Fixes
         if: steps.fmt.outcome == 'failure' && inputs.auto_format && github.event_name == 'pull_request'
@@ -340,18 +365,9 @@ jobs:
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          # GITHUB_TOKEN: ${{ inputs.configure_git_for_private_modules && steps.generate_token.outputs.token || '' }}
-          # GIT_ASKPASS: ${{ inputs.configure_git_for_private_modules && '/tmp/git-askpass.sh' || '' }}
-          # GIT_TERMINAL_PROMPT: ${{ inputs.configure_git_for_private_modules && '0' || '' }}
-        run: |
-          # if [ "${{ inputs.configure_git_for_private_modules }}" == "true" ]; then
-          #   echo "🔍 Debug: Git configuration for Terraform Init"
-          #   echo "GIT_ASKPASS: ${GIT_ASKPASS:-not set}"
-          #   echo "GITHUB_TOKEN: ${GITHUB_TOKEN:+set (${#GITHUB_TOKEN} chars)}"
-          #   git config --global --get-regexp url || true
-          #   git config --global --get-regexp credential || true
-          # fi
-          terraform init
+          GIT_TERMINAL_PROMPT: 0
+          GIT_ASKPASS: echo
+        run: terraform init
 
       - name: 'Determine Key Vault Name'
         id: determine-kv-name
