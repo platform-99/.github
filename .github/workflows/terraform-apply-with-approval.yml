@@ -30,6 +30,25 @@ on:
         description: 'Selected environment for workflow_dispatch (optional)'
         required: false
         type: string
+      configure_git_for_private_modules:
+        description: 'Configure Git authentication for private Terraform modules (requires GH_APP_ID and GH_APP_PRIVATE_KEY secrets)'
+        required: false
+        type: boolean
+        default: false
+      private_module_owner:
+        description: 'GitHub organization name where private Terraform modules are located (defaults to repository owner). The GitHub App must be installed on this organization.'
+        required: false
+        type: string
+      configure_aws_credentials:
+        description: 'Configure AWS credentials using OIDC (requires AWS_ROLE_ARN secret)'
+        required: false
+        type: boolean
+        default: false
+      aws_region:
+        description: 'AWS region for credential configuration (default: ca-central-1)'
+        required: false
+        type: string
+        default: 'ca-central-1'
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -37,6 +56,15 @@ on:
         required: true
       AZURE_SUBSCRIPTION_ID:
         required: true
+      GH_APP_ID:
+        description: 'GitHub App ID for authenticating to private Terraform modules (required if configure_git_for_private_modules is true)'
+        required: false
+      GH_APP_PRIVATE_KEY:
+        description: 'GitHub App private key for authenticating to private Terraform modules (required if configure_git_for_private_modules is true)'
+        required: false
+      AWS_ROLE_ARN:
+        description: 'AWS IAM role ARN to assume for OIDC authentication (required if configure_aws_credentials is true)'
+        required: false
 
 permissions:
   id-token: write  # Required for OIDC
@@ -148,6 +176,56 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform_version }}
 
+      - name: Validate GitHub App secrets
+        if: inputs.configure_git_for_private_modules
+        run: |
+          if [ -z "${{ secrets.GH_APP_ID }}" ]; then
+            echo "❌ Error: 'GH_APP_ID' secret is required when 'configure_git_for_private_modules' is true"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GH_APP_PRIVATE_KEY }}" ]; then
+            echo "❌ Error: 'GH_APP_PRIVATE_KEY' secret is required when 'configure_git_for_private_modules' is true"
+            exit 1
+          fi
+          echo "✅ GitHub App secrets validated"
+
+      - name: Generate Github App Token
+        id: generate_token
+        if: inputs.configure_git_for_private_modules
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.private_module_owner || github.repository_owner }}
+
+      - name: Configure Git for Private Modules
+        if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
+        run: |
+          TOKEN="${{ steps.generate_token.outputs.token }}"
+          MODULE_ORG="${{ inputs.private_module_owner || github.repository_owner }}"
+          
+          # Configure Git URL rewriting for HTTPS
+          git config --global url."https://git:${TOKEN}@github.com/${MODULE_ORG}".insteadOf "https://github.com/${MODULE_ORG}"
+          
+          # Configure Git URL rewriting for SSH
+          git config --global url."https://${TOKEN}:x-access-token@github.com/${MODULE_ORG}".insteadOf ssh://git@github.com/${MODULE_ORG}
+
+      - name: Validate AWS credentials secret
+        if: inputs.configure_aws_credentials
+        run: |
+          if [ -z "${{ secrets.AWS_ROLE_ARN }}" ]; then
+            echo "❌ Error: 'AWS_ROLE_ARN' secret is required when 'configure_aws_credentials' is true"
+            exit 1
+          fi
+          echo "✅ AWS credentials secret validated"
+
+      - name: Configure AWS credentials
+        if: inputs.configure_aws_credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+
       - name: Terraform Init
         working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
         env:
@@ -209,6 +287,56 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Validate GitHub App secrets
+        if: inputs.configure_git_for_private_modules
+        run: |
+          if [ -z "${{ secrets.GH_APP_ID }}" ]; then
+            echo "❌ Error: 'GH_APP_ID' secret is required when 'configure_git_for_private_modules' is true"
+            exit 1
+          fi
+          if [ -z "${{ secrets.GH_APP_PRIVATE_KEY }}" ]; then
+            echo "❌ Error: 'GH_APP_PRIVATE_KEY' secret is required when 'configure_git_for_private_modules' is true"
+            exit 1
+          fi
+          echo "✅ GitHub App secrets validated"
+
+      - name: Generate Github App Token
+        id: generate_token
+        if: inputs.configure_git_for_private_modules
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ inputs.private_module_owner || github.repository_owner }}
+
+      - name: Configure Git for Private Modules
+        if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
+        run: |
+          TOKEN="${{ steps.generate_token.outputs.token }}"
+          MODULE_ORG="${{ inputs.private_module_owner || github.repository_owner }}"
+          
+          # Configure Git URL rewriting for HTTPS
+          git config --global url."https://git:${TOKEN}@github.com/${MODULE_ORG}".insteadOf "https://github.com/${MODULE_ORG}"
+          
+          # Configure Git URL rewriting for SSH
+          git config --global url."https://${TOKEN}:x-access-token@github.com/${MODULE_ORG}".insteadOf ssh://git@github.com/${MODULE_ORG}
+
+      - name: Validate AWS credentials secret
+        if: inputs.configure_aws_credentials
+        run: |
+          if [ -z "${{ secrets.AWS_ROLE_ARN }}" ]; then
+            echo "❌ Error: 'AWS_ROLE_ARN' secret is required when 'configure_aws_credentials' is true"
+            exit 1
+          fi
+          echo "✅ AWS credentials secret validated"
+
+      - name: Configure AWS credentials
+        if: inputs.configure_aws_credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
 
       - name: Download Plan Artifact
         uses: actions/download-artifact@v4
