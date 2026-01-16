@@ -1,0 +1,59 @@
+name: 'Configure Git Authentication for Private GitHub Modules'
+description: 'Validates GitHub App secrets, generates a token, and configures Git for private module access'
+author: 'Michael Patsula'
+
+inputs:
+  configure_git_for_private_modules:
+    required: true
+    description: 'Whether to configure Git for private modules'
+  gh_app_id:
+    required: true
+    description: 'GitHub App ID'
+  gh_app_private_key:
+    required: true
+    description: 'GitHub App private key'
+  private_module_owner:
+    required: false
+    description: 'GitHub organization name where private modules are located (defaults to repository owner)'
+  repository_owner:
+    required: true
+    description: 'Repository owner (github.repository_owner)'
+
+runs:
+  using: composite
+  steps:
+    - name: Validate GitHub App secrets
+      if: inputs.configure_git_for_private_modules == 'true'
+      shell: bash
+      run: |
+        if [ -z "${{ inputs.gh_app_id }}" ]; then
+          echo "❌ Error: 'GH_APP_ID' secret is required when 'configure_git_for_private_modules' is true"
+          exit 1
+        fi
+        if [ -z "${{ inputs.gh_app_private_key }}" ]; then
+          echo "❌ Error: 'GH_APP_PRIVATE_KEY' secret is required when 'configure_git_for_private_modules' is true"
+          exit 1
+        fi
+        echo "✅ GitHub App secrets validated"
+
+    - name: Generate Github App Token
+      id: generate_token
+      if: inputs.configure_git_for_private_modules == 'true'
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.gh_app_id }}
+        private-key: ${{ inputs.gh_app_private_key }}
+        owner: ${{ inputs.private_module_owner || inputs.repository_owner }}
+
+    - name: Configure Git for Private Modules
+      if: inputs.configure_git_for_private_modules == 'true' && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
+      shell: bash
+      env:
+        TOKEN: ${{ steps.generate_token.outputs.token }}
+        MODULE_ORG: ${{ inputs.private_module_owner || inputs.repository_owner }}
+      run: |
+        # Configure Git URL rewriting for HTTPS
+        git config --global url."https://git:${TOKEN}@github.com/${MODULE_ORG}".insteadOf "https://github.com/${MODULE_ORG}"
+        
+        # Configure Git URL rewriting for SSH
+        git config --global url."https://${TOKEN}:x-access-token@github.com/${MODULE_ORG}".insteadOf ssh://git@github.com/${MODULE_ORG}

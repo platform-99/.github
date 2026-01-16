@@ -49,6 +49,10 @@ on:
         required: false
         type: string
         default: 'ca-central-1'
+      kv_names:
+        description: 'Space-separated list of Azure Key Vault names corresponding to environment_folders (e.g., "kv-dev-wb1a2b3c4 kv-test-wb4d5e6f7g8 kv-prod-wb7h8i9j0k1"). Order must match environment_folders. If not provided, Key Vault secret injection will be skipped. Secrets in Key Vault should be named with TF-VAR- prefix (e.g., TF-VAR-db-password).'
+        required: false
+        type: string
     secrets:
       AZURE_CLIENT_ID:
         required: true
@@ -85,75 +89,12 @@ jobs:
 
       - name: Detect modified environments
         id: filter
-        run: |
-          ENVIRONMENTS=""
-          
-          # If selected_environment is provided (workflow_dispatch), use it
-          if [ -n "${{ inputs.selected_environment }}" ]; then
-            ENVIRONMENTS="${{ inputs.selected_environment }}"
-          elif [ "${{ github.event_name }}" == "push" ]; then
-            # For push events, use github.event.before and github.sha
-            BASE_REF="${{ github.event.before }}"
-            HEAD_REF="${{ github.sha }}"
-            
-            # Validate that base ref is not the null commit
-            if [ -n "$BASE_REF" ] && [ "$BASE_REF" != "0000000000000000000000000000000000000000" ]; then
-              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
-            else
-              echo "Warning: Base ref is null commit or not available, checking all files in current commit"
-              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
-            fi
-            
-            # Check which environment folders have changes
-            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
-              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
-                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
-              fi
-            done
-          else
-            # For other events (workflow_dispatch without selected_environment), try to detect from git history
-            if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
-              BASE_REF="HEAD~1"
-              HEAD_REF="HEAD"
-              CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
-              
-              for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
-                if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
-                  ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
-                fi
-              done
-            else
-              # If no previous commit exists, check all files in current commit
-              echo "No previous commit found, checking all files in current commit"
-              CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
-              
-              for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
-                if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
-                  ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
-                fi
-              done
-            fi
-          fi
-          
-          # Remove leading space and convert to JSON array
-          ENVIRONMENTS=$(echo "$ENVIRONMENTS" | xargs)
-          if [ -z "$ENVIRONMENTS" ]; then
-            ENVIRONMENTS="[]"
-          else
-            # Convert space-separated list to JSON array
-            ENVIRONMENTS_ARRAY=""
-            for env in $ENVIRONMENTS; do
-              if [ -z "$ENVIRONMENTS_ARRAY" ]; then
-                ENVIRONMENTS_ARRAY="\"$env\""
-              else
-                ENVIRONMENTS_ARRAY="$ENVIRONMENTS_ARRAY,\"$env\""
-              fi
-            done
-            ENVIRONMENTS="[$ENVIRONMENTS_ARRAY]"
-          fi
-          
-          echo "environments=$ENVIRONMENTS" >> $GITHUB_OUTPUT
-          echo "Detected environments: $ENVIRONMENTS"
+        uses: ./.github/actions/detect-modified-environments
+        with:
+          environment_folders: ${{ inputs.environment_folders }}
+          selected_environment: ${{ inputs.selected_environment }}
+          base_ref: ${{ github.event.before }}
+          head_ref: ${{ github.sha }}
 
   plan:
     needs: detect-changes
@@ -176,39 +117,15 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform_version }}
 
-      - name: Validate GitHub App secrets
+      - name: Configure Git Authentication for Private Modules
         if: inputs.configure_git_for_private_modules
-        run: |
-          if [ -z "${{ secrets.GH_APP_ID }}" ]; then
-            echo "❌ Error: 'GH_APP_ID' secret is required when 'configure_git_for_private_modules' is true"
-            exit 1
-          fi
-          if [ -z "${{ secrets.GH_APP_PRIVATE_KEY }}" ]; then
-            echo "❌ Error: 'GH_APP_PRIVATE_KEY' secret is required when 'configure_git_for_private_modules' is true"
-            exit 1
-          fi
-          echo "✅ GitHub App secrets validated"
-
-      - name: Generate Github App Token
-        id: generate_token
-        if: inputs.configure_git_for_private_modules
-        uses: actions/create-github-app-token@v1
+        uses: ./.github/actions/github-private-modules-auth
         with:
-          app-id: ${{ secrets.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: ${{ inputs.private_module_owner || github.repository_owner }}
-
-      - name: Configure Git for Private Modules
-        if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
-        run: |
-          TOKEN="${{ steps.generate_token.outputs.token }}"
-          MODULE_ORG="${{ inputs.private_module_owner || github.repository_owner }}"
-          
-          # Configure Git URL rewriting for HTTPS
-          git config --global url."https://git:${TOKEN}@github.com/${MODULE_ORG}".insteadOf "https://github.com/${MODULE_ORG}"
-          
-          # Configure Git URL rewriting for SSH
-          git config --global url."https://${TOKEN}:x-access-token@github.com/${MODULE_ORG}".insteadOf ssh://git@github.com/${MODULE_ORG}
+          configure_git_for_private_modules: ${{ inputs.configure_git_for_private_modules }}
+          gh_app_id: ${{ secrets.GH_APP_ID }}
+          gh_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          private_module_owner: ${{ inputs.private_module_owner }}
+          repository_owner: ${{ github.repository_owner }}
 
       - name: Validate AWS credentials secret
         if: inputs.configure_aws_credentials
@@ -225,6 +142,17 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ inputs.aws_region }}
+
+      - name: Inject Terraform Variables from Azure Key Vault
+        if: inputs.kv_names != null && inputs.kv_names != ''
+        uses: ./.github/actions/azure-keyvault-inject-secrets
+        with:
+          environment_folders: ${{ inputs.environment_folders }}
+          kv_names: ${{ inputs.kv_names }}
+          current_environment: ${{ env.TF_DIR }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Terraform Init
         working-directory: ${{ inputs.working_directory }}/${{ env.TF_DIR }}
@@ -288,39 +216,15 @@ jobs:
         with:
           terraform_version: ${{ inputs.terraform_version }}
 
-      - name: Validate GitHub App secrets
+      - name: Configure Git Authentication for Private Modules
         if: inputs.configure_git_for_private_modules
-        run: |
-          if [ -z "${{ secrets.GH_APP_ID }}" ]; then
-            echo "❌ Error: 'GH_APP_ID' secret is required when 'configure_git_for_private_modules' is true"
-            exit 1
-          fi
-          if [ -z "${{ secrets.GH_APP_PRIVATE_KEY }}" ]; then
-            echo "❌ Error: 'GH_APP_PRIVATE_KEY' secret is required when 'configure_git_for_private_modules' is true"
-            exit 1
-          fi
-          echo "✅ GitHub App secrets validated"
-
-      - name: Generate Github App Token
-        id: generate_token
-        if: inputs.configure_git_for_private_modules
-        uses: actions/create-github-app-token@v1
+        uses: ./.github/actions/github-private-modules-auth
         with:
-          app-id: ${{ secrets.GH_APP_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
-          owner: ${{ inputs.private_module_owner || github.repository_owner }}
-
-      - name: Configure Git for Private Modules
-        if: inputs.configure_git_for_private_modules && steps.generate_token.outcome == 'success' && steps.generate_token.outputs.token != ''
-        run: |
-          TOKEN="${{ steps.generate_token.outputs.token }}"
-          MODULE_ORG="${{ inputs.private_module_owner || github.repository_owner }}"
-          
-          # Configure Git URL rewriting for HTTPS
-          git config --global url."https://git:${TOKEN}@github.com/${MODULE_ORG}".insteadOf "https://github.com/${MODULE_ORG}"
-          
-          # Configure Git URL rewriting for SSH
-          git config --global url."https://${TOKEN}:x-access-token@github.com/${MODULE_ORG}".insteadOf ssh://git@github.com/${MODULE_ORG}
+          configure_git_for_private_modules: ${{ inputs.configure_git_for_private_modules }}
+          gh_app_id: ${{ secrets.GH_APP_ID }}
+          gh_app_private_key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          private_module_owner: ${{ inputs.private_module_owner }}
+          repository_owner: ${{ github.repository_owner }}
 
       - name: Validate AWS credentials secret
         if: inputs.configure_aws_credentials
@@ -337,6 +241,17 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ inputs.aws_region }}
+
+      - name: Inject Terraform Variables from Azure Key Vault
+        if: inputs.kv_names != null && inputs.kv_names != ''
+        uses: ./.github/actions/azure-keyvault-inject-secrets
+        with:
+          environment_folders: ${{ inputs.environment_folders }}
+          kv_names: ${{ inputs.kv_names }}
+          current_environment: ${{ env.TF_DIR }}
+          azure_client_id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure_tenant_id: ${{ secrets.AZURE_TENANT_ID }}
+          azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Download Plan Artifact
         uses: actions/download-artifact@v4
