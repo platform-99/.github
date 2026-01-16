@@ -1,0 +1,180 @@
+name: 'Detect Modified Environments'
+description: 'Detects which environment folders have been modified based on git changes. Optionally validates single environment for PRs. Requires pull-requests: read permission if validate_single_environment is true.'
+author: 'Michael Patsula'
+
+inputs:
+  environment_folders:
+    required: true
+    description: 'Space-separated list of environment folder names'
+  selected_environment:
+    required: false
+    description: 'Selected environment for workflow_dispatch (optional)'
+  base_ref:
+    required: false
+    description: 'Base ref for comparison (for PR: github.event.pull_request.base.sha, for push: github.event.before)'
+  head_ref:
+    required: false
+    description: 'Head ref for comparison (for PR: github.event.pull_request.head.sha, for push: github.sha)'
+  validate_single_environment:
+    required: false
+    description: 'Enable single environment validation for PRs. If true, validates only one environment is modified and checks PR labels to allow skipping. Requires pull-requests: read permission in the calling workflow.'
+    default: 'false'
+
+outputs:
+  environments:
+    description: 'JSON array of modified environment folder names'
+    value: ${{ steps.detect.outputs.environments }}
+
+runs:
+  using: composite
+  steps:
+    - name: Detect modified environments
+      id: detect
+      shell: bash
+      env:
+        ENVIRONMENT_FOLDERS: ${{ inputs.environment_folders }}
+        SELECTED_ENVIRONMENT: ${{ inputs.selected_environment }}
+        BASE_REF: ${{ inputs.base_ref }}
+        HEAD_REF: ${{ inputs.head_ref }}
+      run: |
+        ENVIRONMENTS=""
+        
+        # If selected_environment is provided (workflow_dispatch), use it
+        if [ -n "$SELECTED_ENVIRONMENT" ]; then
+          ENVIRONMENTS="$SELECTED_ENVIRONMENT"
+        elif [ "${{ github.event_name }}" == "pull_request" ]; then
+          # For pull_request events, use PR base and head
+          BASE_REF="$BASE_REF"
+          HEAD_REF="$HEAD_REF"
+          
+          # Validate that both refs are available
+          if [ -z "$BASE_REF" ] || [ -z "$HEAD_REF" ]; then
+            echo "Warning: Base or head SHA not available, checking all files in current commit"
+            CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+          else
+            # Get list of changed files
+            CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+          fi
+          
+          # Check which environment folders have changes
+          for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+            if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+              ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+            fi
+          done
+        elif [ "${{ github.event_name }}" == "push" ]; then
+          # For push events, use github.event.before and github.sha
+          BASE_REF="$BASE_REF"
+          HEAD_REF="$HEAD_REF"
+          
+          # Validate that base ref is not the null commit
+          if [ -n "$BASE_REF" ] && [ "$BASE_REF" != "0000000000000000000000000000000000000000" ]; then
+            CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+          else
+            echo "Warning: Base ref is null commit or not available, checking all files in current commit"
+            CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+          fi
+          
+          # Check which environment folders have changes
+          for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+            if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+              ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+            fi
+          done
+        else
+          # For other events (workflow_dispatch without selected_environment), try to detect from git history
+          if git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            BASE_REF="HEAD~1"
+            HEAD_REF="HEAD"
+            CHANGED_FILES=$(git diff --name-only $BASE_REF $HEAD_REF 2>/dev/null || echo "")
+            
+            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+              fi
+            done
+          else
+            # If no previous commit exists, check all files in current commit
+            echo "No previous commit found, checking all files in current commit"
+            CHANGED_FILES=$(git ls-tree -r --name-only HEAD || echo "")
+            
+            for ENV_FOLDER in $ENVIRONMENT_FOLDERS; do
+              if echo "$CHANGED_FILES" | grep -q "^${ENV_FOLDER}/"; then
+                ENVIRONMENTS="$ENVIRONMENTS $ENV_FOLDER"
+              fi
+            done
+          fi
+        fi
+        
+        # Remove leading space and convert to JSON array
+        ENVIRONMENTS=$(echo "$ENVIRONMENTS" | xargs)
+        if [ -z "$ENVIRONMENTS" ]; then
+          ENVIRONMENTS="[]"
+        else
+          # Convert space-separated list to JSON array
+          ENVIRONMENTS_ARRAY=""
+          for env in $ENVIRONMENTS; do
+            if [ -z "$ENVIRONMENTS_ARRAY" ]; then
+              ENVIRONMENTS_ARRAY="\"$env\""
+            else
+              ENVIRONMENTS_ARRAY="$ENVIRONMENTS_ARRAY,\"$env\""
+            fi
+          done
+          ENVIRONMENTS="[$ENVIRONMENTS_ARRAY]"
+        fi
+        
+        echo "environments=$ENVIRONMENTS" >> $GITHUB_OUTPUT
+        echo "Detected environments: $ENVIRONMENTS"
+
+    - name: Check if validation should be skipped
+      id: check-skip
+      if: inputs.validate_single_environment == 'true'
+      shell: bash
+      env:
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        SKIP_VALIDATION="false"
+        
+        # For pull_request, check for label to skip validation
+        if [ "${{ github.event_name }}" == "pull_request" ] && [ -n "$PR_NUMBER" ]; then
+          # Check if PR has the skip validation label
+          # GITHUB_TOKEN is automatically available if workflow has permissions
+          LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name' 2>/dev/null || echo "")
+          if echo "$LABELS" | grep -qE "(allow-multi-env|skip-env-validation)"; then
+            SKIP_VALIDATION="true"
+            echo "Validation skipped via PR label"
+          fi
+        fi
+        
+        echo "skip=$SKIP_VALIDATION" >> $GITHUB_OUTPUT
+        echo "Skip validation: $SKIP_VALIDATION"
+
+    - name: Validate single environment (PR only)
+      if: inputs.validate_single_environment == 'true' && github.event_name == 'pull_request' && steps.check-skip.outputs.skip != 'true'
+      shell: bash
+      env:
+        ENVIRONMENTS: ${{ steps.detect.outputs.environments }}
+      run: |
+        # Handle empty array case
+        if [ "$ENVIRONMENTS" = "[]" ]; then
+          echo "⚠️  Warning: No environment changes detected"
+          exit 0
+        fi
+        
+        # Count environment names in the JSON array
+        # Remove brackets and quotes, then count words
+        ENV_LIST=$(echo "$ENVIRONMENTS" | sed 's/\[//g' | sed 's/\]//g' | sed 's/"//g' | sed 's/,/ /g')
+        ENV_COUNT=$(echo "$ENV_LIST" | wc -w)
+        
+        if [ "$ENV_COUNT" -gt 1 ]; then
+          echo "❌ Error: Multiple environments detected in this PR!"
+          echo "This PR modifies: $ENVIRONMENTS"
+          echo ""
+          echo "Please split your changes into separate PRs, one per environment."
+          echo "This ensures better code review, reduces risk, and maintains clear audit trails."
+          echo ""
+          echo "To skip this validation, add the label 'allow-multi-env' or 'skip-env-validation' to the PR."
+          exit 1
+        else
+          echo "✅ Single environment detected ($ENV_LIST) - validation passed"
+        fi
