@@ -499,7 +499,9 @@ jobs:
           PLAN=$(cat plan_output.txt 2>/dev/null || echo "No changes to infrastructure.")
           WORKFLOW_RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
-          gh pr comment ${{ github.event.pull_request.number }} --body "## Terraform Plan for ${{ env.TF_DIR }} 📖
+          # Write comment body to a file to avoid "Argument list too long" error
+          cat > comment_body.txt <<EOF
+          ## Terraform Plan for ${{ env.TF_DIR }} 📖
           
           <details><summary>Show Plan</summary>
           
@@ -509,6 +511,9 @@ jobs:
           
           </details>
           
-          📝 The plan was generated in the [Github Actions Workflow Run]($WORKFLOW_RUN_URL)"
+          📝 The plan was generated in the [Github Actions Workflow Run]($WORKFLOW_RUN_URL)
+          EOF
+          
+          gh pr comment ${{ github.event.pull_request.number }} --body-file comment_body.txt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
